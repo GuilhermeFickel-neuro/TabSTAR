@@ -44,3 +44,16 @@ To compare the performance with a baseline, choose a model and a dataset and run
 ```commandline
 python do_baseline.py --model=rf --dataset_id=46655
 ```
+
+## Using Custom Datasets
+
+You can now use your own CSV datasets with TabSTAR! For detailed instructions, see [CUSTOM_DATASET_USAGE.md](CUSTOM_DATASET_USAGE.md).
+
+**Quick example:**
+```commandline
+# Using the helper script (recommended)
+python use_custom_dataset.py --csv_path your_data.csv --target_column target_col --pretrain_exp YOUR_MODEL
+
+# Or directly with do_finetune.py
+python do_finetune.py --pretrain_exp=YOUR_MODEL --dataset_id=custom --custom_csv_path=your_data.csv --custom_target_column=target_col
+```

@@ -50,9 +50,10 @@ class TabStarTrainer(TabularModel):
 
     def __init__(self, run_name: str, dataset_ids: List[TabularDatasetID], device: torch.device, run_num: int = 0,
                  train_examples: int = 0, args: Optional[PretrainArgs] = None,
-                 carte_lr_index: Optional[int] = None):
+                 carte_lr_index: Optional[int] = None, custom_csv_path: str = None, custom_target_column: str = None):
         super().__init__(run_name=run_name, dataset_ids=dataset_ids, device=device, run_num=run_num,
-                         train_examples=train_examples, args=args, carte_lr_index=carte_lr_index)
+                         train_examples=train_examples, args=args, carte_lr_index=carte_lr_index,
+                         custom_csv_path=custom_csv_path, custom_target_column=custom_target_column)
         cprint(f"Initialized the network {self.MODEL_NAME}")
         self.is_pretrain = isinstance(self.args, PretrainArgs)
         self.model: Optional[Module] = None

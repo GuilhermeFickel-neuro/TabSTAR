@@ -1,0 +1,339 @@
+\documentclass{article}
+
+% ready for submission
+\PassOptionsToPackage{numbers, compress}{natbib}
+\usepackage[preprint]{neurips_2025}
+
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+\usepackage{hyperref}       % hyperlinks
+\usepackage{url}            % simple URL typesetting
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{amsfonts}       % blackboard math symbols
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+\usepackage[dvipsnames]{xcolor}
+\usepackage{microtype}      % microtypography
+\usepackage{amsmath}
+
+
+\usepackage{longtable}
+\usepackage{booktabs}             % for \toprule, \midrule…
+\setlength{\LTcapwidth}{\textwidth}  % keep your caption from running off
+
+\definecolor{darkgreen}{rgb}{0.0, 0.5, 0.0} 
+\definecolor{brown}{rgb}{0.5, 0, 0} 
+
+
+\usepackage{graphicx}
+\usepackage{subcaption}
+
+\usepackage{ifthen}
+
+
+\newboolean{showNote}
+\newboolean{showChanged}
+
+\setboolean{showNote}{true} % true/false  
+\setboolean{showChanged}{true} % true/false  
+
+\ifthenelse{\boolean{showNote}}
+  {\newcommand{\note}[1]{\textcolor{red}{\# #1}}
+  \newcommand{\aNote}[1]{\textcolor{red}{\#A: #1}}
+  \newcommand{\eNote}[1]{\textcolor{brown}{\#E: #1}}
+  \newcommand{\reviewerNote}[1]{\textcolor{orange}{\#REVIEWER: #1}}
+  }
+  {\newcommand{\note}[1]{}
+  \newcommand{\eNote}[1]{}
+  \newcommand{\aNote}[1]{}
+  \newcommand{\reviewerNote}[1]{}}
+
+\ifthenelse{\boolean{showChanged}}
+  {\newcommand{\Changed}[1]{\textcolor{brown}{#1}}}
+  {\newcommand{\Changed}[1]{}}
+  
+
+\newcommand{\aAdded}[1]{\textcolor{blue}{#1}}
+\newcommand{\eAdded}[1]{\textcolor{darkgreen}{#1}}
+
+
+\newif\ifappendicesincluded
+\appendicesincludedtrue %change to \appendicesincludedtrue
+
+\newcommand{\appref}[1]{%
+  \ifappendicesincluded
+    \ref{#1}%
+  \else
+    \ref*{#1}%
+  \fi
+}
+
+
+\title{TabSTAR: A Foundation Tabular Model With Semantically Target-Aware Representations}
+
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to LaTeX to determine where to break the
+% lines. Using \AND forces a line break at that point. So, if LaTeX puts 3 of 4
+% authors names on the first line, and the last on the second line, try using
+% \AND instead of \And before the third author name.
+
+
+\author{%
+  Alan Arazi \quad Eilam Shapira \quad Roi Reichart \\
+  \texttt{\{alanarazi7, eilam.shapira, roireichart\}@gmail.com} \\ Technion - IIT
+}
+
+
+\begin{document}
+
+
+\maketitle
+
+
+\begin{abstract}
+  \input{abstract}
+  
+\end{abstract}
+
+\section{Introduction} \label{sec:introduction}
+
+In recent years, deep learning has profoundly reshaped research and practice in computer vision \cite{krizhevsky_imagenet_2012, simonyan_very_2015, he_deep_2015, dosovitskiy_image_2021} and natural language processing \cite{mikolov_efficient_2013, bahdanau_neural_2016, vaswani_attention_2017, devlin_bert_2019, brown_language_2020}. This transformation was notably accelerated by the rise of foundation models \cite{bommasani_opportunities_2021, zhou_comprehensive_2023, awais_foundation_2025}, capable of cross-modal understanding and generalization from massive pretraining across heterogeneous data sources. Importantly, they enabled an end-to-end approach that outperformed previous modular alternatives \cite{sutskever_sequence_2014, amodei_deep_2016}. Moreover, deep learning models excel at transfer learning \cite{zhuang_comprehensive_2021}, generalizing from their pretraining data to new tasks. Their strength, combined with techniques like In-Context Learning (ICL) \cite{brown_language_2020} and Parameter-Efficient Fine-Tuning (PEFT) \cite{houlsby_parameter-efficient_2019}, has enabled rapid adaptation to new tasks with only limited labeled data.
+
+Despite this progress, deep learning has historically lagged behind gradient-boosted decision trees (GBDTs) on tabular data \cite{breiman_random_2001, chen_xgboost_2016, prokhorenkova_catboost_2018}, in both classification and regression tasks \cite{shwartz-ziv_tabular_2022, borisov_deep_2024, grinsztajn_why_2022, mcelfresh_when_2023}. The heterogeneity of tabular data, which lacks the spatial locality of images or the sequential order of text, makes it more challenging for deep models to learn. Consequently, GBDTs have remained the de facto standard for tabular learning, offering strong out-of-the-box performance, computational efficiency, and built-in inductive biases (e.g., robustness to skewed feature distributions and automatic feature selection) that make them especially well-suited to heterogeneous datasets \cite{grinsztajn_why_2022}. Nonetheless, GBDTs cannot be pretrained to reuse strong representations for downstream tasks. This limitation becomes critical in low-data settings like those often found in healthcare applications \cite{levin_transfer_2022}. Crucially, they must rely on external embedding models to process unstructured data types like text and images, yielding fixed feature representations that cannot be finetuned for a specific prediction task. 
+
+
+\begin{table}[h]
+\centering
+\caption{A binary classification toy dataset for hospital patient release outcomes. \textit{Decision} is the target variable. \textit{Age} (numerical), \textit{Department} (high-cardinality), and \textit{Report} (textual) are the features.}
+\begin{tabular}{llll}
+\toprule
+\textbf{Age} & \textbf{Department} & \textbf{Report}                                     & \textbf{Decision} \\
+\midrule
+45          & Cardiology   & Mild chest discomfort.                & Released         \\
+62          & Neurology    & Complaints of headache and occasional dizziness.      & Hospitalized     \\
+38          & Oncology     & Completed treatment cycle without adverse reactions.  & Released         \\
+55          & Neurology    & Reports episodes of vertigo and memory lapses.        & Hospitalized     \\
+\bottomrule
+\end{tabular}
+\label{tab:example_dataset}
+\end{table}
+
+The emerging field of Tabular Foundation Models (TFMs) has begun addressing these shortcomings, introducing powerful cross-dataset learning strategies \cite{yan_making_2023, kim_carte_2024, hollmann_accurate_2025}. However, the flagship model TabPFN-v2 \cite{hollmann_accurate_2025} still handles text inputs no more flexibly than conventional GBDTs. This design choice is not incidental; historically, tabular benchmarks have prioritized numerical datasets without free-text features, largely for ease of modeling and evaluation. A recent study \cite{kohli_towards_nodate} of mainstream tabular datasets benchmarks \cite{gijsbers_amlb_2024, fischer_openml-ctr23_2023, ye_closer_2024, mcelfresh_when_2023} found that half of these datasets are more than 20 years old, being a poor representation of modern real-world data.
+
+
+Real-world tabular datasets often include high-cardinality\footnote{High-cardinality features are categorical columns with a large number of unique values.} and free-text features \cite{cerda_encoding_2022}, illustrated by a toy example in Table~\ref{tab:example_dataset}. In such datasets, free-text features (e.g., \textit{Report}) carry rich semantic information critical for tasks like predicting whether a patient will be discharged from the hospital or require continued care. Yet, most models encode them in a target-agnostic manner, delegating to a generic embedding that fails to capture task-specific nuances for predicting \textit{Decision}. Crucially, that same embedding would have been used for a different target variable (e.g., \textit{Treatment Cost}). Similarly, categorical features with dozens of unique values (e.g., \textit{Department}) are difficult to encode efficiently without external knowledge, making naive approaches brittle and limiting generalization. Importantly, the column names, which could guide the model toward more effective representations, are typically ignored. Addressing these limitations is crucial for developing tabular models that leverage semantic information, transfer knowledge from many datasets, and generalize across domains.
+
+
+In this paper, we introduce \textbf{TabSTAR}: a novel \textbf{Tab}ular Foundation Model with \textbf{S}emantically \textbf{T}arget-\textbf{A}ware \textbf{R}epresentations,\footnote{Code is available at \url{https://github.com/alanarazi7/TabSTAR}.} designed explicitly for end-to-end handling of purely textual features. By integrating an unfrozen text encoder at its core, TabSTAR can optimize free-text feature representations, demonstrating their clear superiority over alternative frozen embedding approaches. Additionally, it introduces a novel approach of \emph{target-aware tokens}, which inject semantic information about the target variable as part of the input, allowing for efficient parameter sharing and resulting in an architecture with no dataset-specific parameters (see Figure~\ref{fig:architecture}). TabSTAR's training is highly efficient\footnote{Pretraining within 48 hours on a single A40 GPU. Finetuning with PEFT for low memory footprint.} and its performance steadily improves with more pretraining data. Empirically, TabSTAR achieves state-of-the-art (SOTA) performance on classification benchmarks containing substantial textual content, demonstrating significant advances over GBDTs and leading TFMs.
+
+
+\section{Related Work}\label{sec:related}
+
+This section reviews prior work in five areas relevant to our approach. We begin with deep learning methods tailored for tabular data, which were applied to a single dataset. We then discuss cross-dataset transfer learning techniques that improve generalization by leveraging related datasets. Next, we cover the field of TFMs, which aim to generalize across diverse tasks and datasets through large-scale pretraining. Finally, we review recent work on applying large language models (LLMs) to tabular data and elaborate on existing AutoML \cite{he_automl_2021} multimodal solutions.
+
+\paragraph{Deep Learning on a Single Tabular Dataset}
+
+Several architectures have been proposed to enhance deep learning for tabular data \cite{song_autoint_2019, katzir_net-dnf_2020, wang_dcn_2021, yang_locally_2022}. \textit{TabNet} \cite{arik_tabnet_2021} and \textit{TabTransformer} \cite{huang_tabtransformer_2020} introduced attention mechanisms into tabular deep learning, while \textit{FT-Transformer} \cite{gorishniy_revisiting_2021} and its improvement \cite{gorishniy_embeddings_2022} jointly integrated numerical and categorical features into a transformer \cite{vaswani_attention_2017}. Other novel approaches leveraged inter-example information at inference time, with \textit{SAINT} \cite{somepalli_saint_2021} proposing row-level attention between examples, \textit{Non-Parametric Transformers} \cite{kossen_self-attention_2021} processing the entire dataset, including labels, in a single forward pass, and \textit{TabR} \cite{gorishniy_tabr_2023} combining a k-nearest-neighbor mechanism with a traditional Multi-Layer Perceptron (MLP) architecture. Recent works such as \textit{TabM} \cite{gorishniy_tabm_2025} and \textit{RealMLP} \cite{holzmuller_better_2024} focused on refining MLPs without an attention component. Despite these innovations, single‐dataset deep learning models have not yet convincingly outperformed GBDTs \cite{shwartz-ziv_tabular_2022, grinsztajn_why_2022, shmuel_comprehensive_2024}. Furthermore, none of them addressed the challenge of modeling tabular datasets with rich textual features.
+
+\paragraph{Cross-Dataset Transfer Learning} 
+
+Deep learning was proven to shine when performing transfer learning in many machine learning domains \cite{zhuang_comprehensive_2021}. Motivated by this success, \cite{levin_transfer_2022, zhou_unlocking_2023} proved that cross-dataset learning can boost single-dataset performance, but were limited to strict requirements such as partial overlap of feature names. To address this limitation, \textit{TransTab} \cite{wang_transtab_2022} integrated semantic understanding into feature tokenization, and \textit{XTab} \cite{zhu_xtab_2023} pretrained a transformer backbone with dataset-specific parameters, proving that pretraining contributes to a stronger initialization for a downstream task. Despite their small scale, these studies demonstrated cross-dataset transfer learning’s potential, laying essential groundwork for the rise of TFMs.
+
+\paragraph{Tabular Foundation Models} TFMs represent an emerging paradigm in tabular learning. While the definition is still evolving, we adopt the framing proposed by \cite{van_breugel_position_2024}, which identifies key desired characteristics of TFMs: large-scale pretraining with adaptability to downstream tasks, mixed-type column support, cross-domain generalization, use of textual metadata,\footnote{Contextual information such as the dataset description, column names and category names.} and column-order invariance. 
+
+\textit{TabPFN} \cite{hollmann_tabpfn_2022} is recognized as the first TFM, and its successor \textit{TabPFN-v2} \cite{hollmann_accurate_2025} currently sets the SOTA in tabular learning, becoming a popular approach for TFMs \cite{qu_tabicl_2025, feuer_tunetables_2024}. TabPFN-v2 was the first model to consistently outperform GBDTs on medium-sized datasets, by pretraining Bayesian Prior-Data Fitted Networks (PFNs) \cite{muller_transformers_2021} on 130 million synthetic datasets. Using ICL at inference time, it accepts up to 10,000 examples as input and predicts without updating its weights. Nonetheless, similarly to GBDTs, TabPFN-v2 uses off-the-shelf embeddings for text features, limiting its effectiveness.
+
+\textit{CM2} \cite{zhou_unlocking_2023}, \textit{CARTE} \cite{kim_carte_2024} and \textit{TP-BERTa} \cite{yan_making_2023} represent a shift toward semantic tabular modeling, leveraging textual signals and external knowledge at a greater scale. Unlike prior methods, these models transfer knowledge via language representations. \textit{CM2} pretrained on over 2,000 datasets, but did not focus on free-text features and used static word embeddings without further finetuning them. \textit{CARTE} encodes tables as star-shaped graphs, jointly representing features by their names and values, and applies attention over the graph to capture contextual relations. While effective for high-cardinality features, it lacks exposure to longer free-text fields during pretraining and was proven useful mainly for small datasets. \textit{TP-BERTa} adapts \textit{RoBERTa} \cite{liu_roberta_2019} with intra-feature attention and a tokenization scheme that maps numerical values into discrete relative-magnitude bins, to address the weakness of language models when tokenizing numbers \cite{thawani_representing_2021}. Although it performs well, its use of dataset-specific output layers limits scalability and complicates multi-task learning. Consequently, they trained two separate models,\footnote{One for classification and one for regression. A joint model for both tasks performed significantly worse.} wasting potential for better cross-dataset learning.
+Notably, none of these approaches finetune semantic representations during downstream task training. In our work, we demonstrate that this is critical to align textual and tabular features.
+
+\paragraph{Large Language Models for Tabular Data}
+
+The remarkable success of LLMs is unprecedented \cite{brown_language_2020, openai_gpt-4_2024}. During the past years, several research attempts have tried to combine LLMs and tabular data. One line of work is on using LLMs directly for tabular prediction, by converting tabular data into serialized text. \textit{TabLLM} \cite{hegselmann_tabllm_2023} assessed LLMs under few-shot scenarios, while \textit{Tabula-8b} \cite{gardner_large_2024} finetuned the Llama 3-8B model extensively on tabular data. Although useful for few-shot learning, these models are computationally expensive,\footnote{Llama 3-8b has orders of magnitude more parameters than TP-BERTa, which has roughly 110M parameters.} suboptimal for numerical features \cite{thawani_representing_2021, van_breugel_position_2024}, and potentially compromised on widely-used benchmarks due to prior exposure during training \cite{bordt_elephants_2024}. While current generations of LLMs weren't adopted for tabular learning, their emergent knowledge from their pretraining could be crucial when textual features are present \cite{van_breugel_position_2024, fang_large_2024}. Additionally, LLMs can be used in multiple aspects of tabular learning, as they seem to be promising synthetic data generators \cite{borisov_language_2022, solatorio_realtabformer_2023}, useful data cleaners \cite{bendinelli_exploring_2025} and clever feature engineers \cite{hollmann_large_2023}. 
+
+\paragraph{Multimodal AutoML} Historically, textual tabular datasets have been largely overlooked in classical tabular benchmarks. However, the AutoML \cite{he_automl_2021} community has made significant progress in developing multimodal solutions. In particular, \textit{AutoGluon} \cite{erickson_autogluon-tabular_2020} introduced the \textit{AutoML Multimodal Benchmark} \cite{shi_benchmarking_2021}, initially focusing on text features and later evolving into \textit{AutoGluon-Multimodal} \cite{tang_bag_2024, tang_autogluon-multimodal_2024}, which incorporates images as well. This powerful AutoML framework can fuse text and image foundation models with tabular models and ensemble multiple models through a meta-learning approach \cite{feurer_auto-sklearn_2022}, making it one of the few systems able to refine static textual representations via joint learning.
+Nevertheless, this line of work should not be seen as a single model but rather as a highly optimized, production-ready system. According to the authors, it is "a collection of tricks that significantly enhance performance" \cite{tang_bag_2024}, establishing itself as a robust approach for multimodal, multi-model tabular learning. However, this line of work remains somewhat orthogonal to the development of novel TFMs.
+
+
+\begin{figure}[t!]
+  \centering
+  \includegraphics[width=\textwidth]{figures/main.pdf}
+  \caption{The TabSTAR architecture illustrated with our toy dataset. The model processes \textcolor{ForestGreen}{numerical features}, \textcolor{BrickRed}{textual features}, and \textcolor{RoyalBlue}{all possible target values} for classification.} 
+    \label{fig:architecture}
+\end{figure}
+
+\section{TabSTAR}
+\label{sec:tabstar}
+
+In this section, we introduce TabSTAR: a Tabular Foundation Model with Semantically Target-Aware Representations. Our training framework consists of two stages: (1) \textbf{Pretraining}, where it is pretrained over a corpus of tabular datasets\footnote{Ranging from metadata-rich, text-heavy datasets to numeric-only tables lacking column names.} in a multi-task regime, mixing classification with regression tasks, then (2) \textbf{Finetuning}, where the pretrained model is further trained with \textit{LoRA} \cite{hu_lora_2021} on a single downstream task. TabSTAR is designed to enable effective cross-dataset learning by applying supervised learning on the target variable in both stages. At its core, is uses an unfrozen encoder-only language model, which can invoke world knowledge acquired during the language model pretraining.\footnote{Note that the language-model pretraining occurs before TabSTAR's pretraining. Unless specified differently, the term pretraining refers to TabSTAR's pretraining, which assumes the use of a pretrained language model.} The encoder is combined with a tabular-specific architecture tailored to structured data, mitigating the known limitations of language models in tabular settings \cite{thawani_representing_2021, van_breugel_position_2024}.
+
+TabSTAR's architecture comprises five core modules: (1) \textbf{Verbalization}, mapping every feature into a textual representation composed of both the column name and value, with a special treatment to numerical features for full numerical precision; (2) \textbf{Encoding}, transforming semantic and numerical data into meaningful embeddings of the same dimension; (3) \textbf{Fusion}, integrating textual and numerical representations; (4) \textbf{Interaction}, modeling dependencies and relationships between different elements through self-attention and cross-element interactions; and (5) \textbf{Prediction}, where Interaction's outputs are projected into a real value for regression or a probability distribution for classification. Figure~\ref{fig:architecture} illustrates the architecture while Appendix~\appref{app:arch} elaborates, and Appendix~\appref{app:train} discusses the training.
+
+A key innovation of TabSTAR is the introduction of \textit{target-aware tokens}, a novel approach that integrates the target variable's identity as an input to the model. Unlike existing TFMs \cite{hollmann_accurate_2025, kim_carte_2024, yan_making_2023, ye_towards_2024, zhu_xtab_2023, wang_transtab_2022}, which treat the target value as a mere label, TabSTAR fuses target-awareness from the very beginning. For classification tasks, each target value is verbalized and encoded like any other feature. Then, features and target tokens interact with each other, building representations that are then used for prediction. Crucially, this target-awareness allows parameter sharing between all target tokens, which can later use a shared prediction head that maps tokens to probabilities regardless of the number of classes and their identity. By doing so, TabSTAR eliminates the need for dataset-specific components commonly found in prior work \cite{gorishniy_revisiting_2021, zhu_xtab_2023, yan_making_2023}. TabSTAR's flexible architecture effortlessly scales\footnote{Except when the number of features becomes very large, where memory limitations may arise.} to any dataset size, and handles any number of classes in multiclass classification tasks.
+
+\begin{table}[h]
+\centering
+\caption{An illustrative verbalization of the first patient of Table~\ref{tab:example_dataset}. Each semantic feature is verbalized with its name and value. The numerical \textit{Age} value 45 is standardized (mapped into z-scores, e.g., 0.27) and binned (providing a range to the verbalization, e.g., 40-50, and its quantile). The target variable  \textit{Decision} is mapped into its two possible elements, regardless of its original true value.}
+\begin{tabular}{lllr}
+\toprule
+\textbf{Name} & \textbf{Value} & \textbf{Semantic} & \textbf{Numerical} \\
+\midrule
+Age             & 45                            & ``Age: 40–50 (Quantile 50–60\%)''               & $0.27$      \\
+Department      & Cardiology                    & ``Department: Cardiology''                     & \phantom{0}-  \\
+Report          & Mild chest discomfort.        & ``Report: Mild chest discomfort.''             & \phantom{0}-  \\
+Decision        & Hospitalized                  & ``Target. Decision: Hospitalized''             & \phantom{0}-  \\
+Decision & Released          & ``Target. Decision: Released''       & \phantom{0}-  \\
+\bottomrule
+\end{tabular}
+\label{tab:patient_verbalization}
+\end{table}
+
+\paragraph{Verbalization}\label{sec:arch:verbalization}
+All the features and each of the target values are processed into a sequence of \textit{elements}. Numerical features are processed into two inputs: a numerical one and a semantic one. The numerical input is standardized using z-scores, with outlier clipping at ±3 standard deviations. In addition, they are verbalized using quantile-based binning into 10 bins, a novel approach to mitigate the precision loss inherent in language models \cite{thawani_representing_2021}. Appendix~\appref{app:arch:verbalization} shows a precise example and \S\ref{par:numerical-verbalization} discusses different verbalization strategies. In contrast, semantic features are directly verbalized by concatenating the feature name and textual value, without any numerical representation. The target variable is also included as part of the input: In classification tasks, each of the $C$ possible values is represented by an element, constant for every example, while the true value remains hidden. For regression tasks, a single element is verbalized, carrying only the target name. \hyperref[tab:example_dataset]{Table~\ref*{tab:example_dataset}} shows a toy dataset of patient records and outcomes and Table~\ref{tab:patient_verbalization} shows the verbalization for the first patient.
+
+\paragraph{Encoding} We employ a pretrained \textit{e5-small-v2} \cite{wang_text_2024} embedding model for semantic encoding, chosen for its strong performance on the \textit{MTEB} benchmark~\cite{muennighoff_mteb_2023} with a relatively modest parameter count. By unfreezing half of its layers, the representations are optimized for predicting the target variable, which leads to a significant impact on TabSTAR performance (see \S\ref{analysis:e5_layers}). Each verbalization element is encoded independently into a semantic representation, with attention applied between tokens within each sequence element. In parallel, we encode standardized numerical values by projecting them into the same dimension using a small MLP. For the patient in Table~\ref{tab:patient_verbalization}, this results in a numerical embedding for \textit{Age} alongside semantic representations for each of the five verbalizations.
+
+\paragraph{Fusion} To obtain a unified representation for each sequence element, we apply a fusion block consisting of a single encoder-only transformer layer. For each numerical feature, the block attends over its numerical and semantic embeddings, producing a fused representation. In our running example, the representation of \textit{Age} now jointly captures both its semantic context (the fact that the value represents age) as well as its numerical value (the patient's age, 45, or 0.27 after standardization).
+
+\paragraph{Interaction}
+The fused, semantically-rich and numerically-grounded representations of all elements interact via a 6-layer Transformer encoder~\cite{vaswani_attention_2017}. Each input element is now a token, with feature tokens and target tokens all attending to each other. Unlike standard language models which integrate positional encoding, the Interaction module's inputs are order-invariant, a desiredatum for TFMs, as defined by \cite{van_breugel_position_2024}. The encoder produces contextualized representations for each target value. In our example, this yields dedicated embeddings for the \textit{Release} and \textit{Hospitalization} target values. The role of these representations is to carry information about the likelihood of each value to be the true value.
+
+\paragraph{Prediction} TabSTAR is designed for cross-dataset learning, with shared regression and classification heads used during both pretraining and finetuning. For classification, each of the \(C\) target tokens is processed independently through the same classification head, which projects them to scores. We then apply a softmax over all the possible values to yield a probability distribution. Crucially, the fact that target tokens for every class in every dataset share the same classification head allows efficient parameter sharing, flexibly supports any number of output classes, and removes any need for dataset-specific parameters. This is not only efficient during pretraining, but also provides a better initialization for finetuning. In our example, both the \textit{Released} and \textit{Hospitalized} tokens go through the same classification head, which maps them from representations to logits. Applying softmax yields predicted probabilities. For regression tasks, a single target token is projected into a real value.
+
+\section{Experiments}
+\label{sec:main_experiments}
+
+\paragraph{The TabSTAR Pretraining Corpus}\label{sec:exp:corpus}  While TabSTAR could be pretrained on a massive scale, for this work we limit ourselves to a modest pretraining corpus focusing on classification, as we believe that TabSTAR's inductive biases are best suited to shine in this task. We manually curate a pretraining corpus of 350 high-quality tabular datasets (253 classification, 97 regression), in a tedious process in which we uncover numerous duplications in the most popular tabular repositories, OpenML \cite{vanschoren_openml_2014} and Kaggle,\footnote{https://www.kaggle.com/datasets} as elaborated by \cite{tschalzev_unreflected_2025}. Our datasets are sourced from popular benchmarks \cite{gijsbers_amlb_2024, kim_carte_2024, fischer_openml-ctr23_2023, feurer_auto-sklearn_2022, grinsztajn_why_2022, shi_benchmarking_2021, mcelfresh_when_2023, grinsztajn_vectorizing_2023}, which have almost non-existing representation of textual tabular datasets. Thus, we furthermore increase our corpus, focusing on classification datasets with rich semantic content. See Appendix~\appref{app:train_datasets} for more details.
+
+\paragraph{Benchmark} \label{sec:exp:benchmark} 
+Tabular datasets with free-text have seen little prior research, and accordingly, benchmarks are incredibly rare. Therefore, we consider all the possible datasets from \textit{AutoML Multimodal Benchmark} \cite{shi_benchmarking_2021}, from the analysis about free-text and high-cardinality features by \cite{grinsztajn_vectorizing_2023} and from the CARTE paper \cite{kim_carte_2024}. After a deduplication process we end up with 50 datasets. However, there are two important limitations: first, the benchmark is heavily biased towards regression, with 36 datasets in total. Secondly, 29 out of these 36 datasets were solely contributed by the CARTE benchmark, which focuses more heavily on high-cardinality features as it was pretrained over knowledge graphs. While our main motivation is classification tasks with textual features, we decide nevertheless to evaluate on the full set of 50 datasets although it heavily biases towards regression problems and high-cardinality features, rather than classification and free-text (see Appendix~\appref{app:benchmark}).
+
+\paragraph{Baselines}\label{sec:exp:baselines}
+We compare TabSTAR against a diverse set of baselines. For tree-based methods, we evaluate \textit{CatBoost} \cite{prokhorenkova_catboost_2018}, \textit{XGBoost} (XGB) \cite{chen_xgboost_2016}, and \textit{Random Forest} (RF) \cite{breiman_random_2001} with the default configuration proposed by \cite{gorishniy_revisiting_2021}. For CatBoost and XGBoost we consider a tuned version, where hyperparameters are optimized separately for each task using random search with 5-fold cross-validation under a 4-hour budget on 8 CPU cores. Among TFMs, we evaluate \textit{TabPFN-v2} \cite{hollmann_accurate_2025} and \textit{CARTE} \cite{kim_carte_2024}. For CARTE, we tune only the learning rate for each task, following the original paper. Since the public TabPFN-v2 model does not support text, we use their closed-sourced API client.\footnote{https://github.com/PriorLabs/tabpfn-client} For models lacking native support for textual features, we embed text using \textit{e5-small-v2} \cite{wang_text_2024}, allowing a fair comparison. For more details about the hyperparameters for each baseline as well as exclusion of models such as \textit{TP-BERTa} due to potential leakage concerns, see Appendix~\appref{app:baselines}.
+
+\paragraph{Experimental Setup}\label{sec:exp:setup} Each of the 50 datasets in the benchmarks is evaluated with 10 random train-test splits (90\% training, 10\% testing), resulting in 500 runs per model. While 30 of the datasets have more than 10,000 examples, the evaluated TFMs have strict limitations. TabPFN-v2 employs ICL and thus receives as input at most 10,000 examples. Although CARTE imposes no size cap,\footnote{In their own paper, CARTE was evaluated only over up to 2,048 examples, without scaling guarantees.} it suffers from inefficiency and no preset configuration, requiring six learning-rate trials and totalling 6,000 slow GPU runs. Because of these important limitations, we consider two experiment conditions: (1) \textbf{10K}: Each model is trained\footnote{While TabPFN-v2 isn't technically trained, we adopt this term for conciseness.} over at most 10,000 training examples, and (2) \textbf{Unlimited}: We add TabSTAR-Unlimit, CatBoost-Tuned-Unlimit, and XGBoost-Tuned-Unlimit and evaluate them on the full version of the 30 datasets,\footnote{We technically cap the amount of examples to 100,000 for computational efficiency.} while retaining 10K baselines as weaker reference points. We exclude the untuned GBDTs and keep the same number of models as in the 10K condition.
+
+\paragraph{The TabSTAR Training} To maximize the value of cross-dataset learning, instead of pretraining TabSTAR once, we create five dataset splits. Each variant is pretrained on the 350 pretraining datasets and 40 of the benchmark datasets, while the other 10 serve exclusively as its test set. 
+Crucially, the whole collection was carefully curated to prevent any data leakage from duplicate or overly similar datasets. For finetuning, while dataset-specific hyperparameter tuning can boost performance, we believe that robust out-of-the-box defaults are essential for TFMs and their evaluation, following Tab-PFN-v2's approach. Therefore, we use a default hyperparameters configuration that was found robust over a disjoint set of tabular datasets, as detailed in Appendix~\appref{app:lora}. 
+
+\section{Results}\label{sec:results}
+
+We evaluate each model using AUROC (classification) and \(R^2\) (regression) as metrics. Following \cite{hollmann_accurate_2025}, we normalize scores per dataset split to the $[0, 1]$ range, using the best and worst model performance as anchors.\footnote{For a single run, the best model gets 1, the worst gets 0 and the rest are linearly scaled accordingly.} The normalized scores are averaged across all runs, with 95\% CIs. Performance for all models on both conditions are shown in Figure~\ref{fig:main_results_classification} (classification) and Figure~\ref{fig:main_results_regression} (regression). Besides their example limit, TabPFN-v2 cannot process 4 datasets (more than 10 target classes or more than 500,000 cells) and CARTE cannot handle 15 (a bug in their PowerTransformer implementation). Reported averages for these models are computed only over the datasets where evaluation is feasible. Appendix~\appref{app:results} expands on dataset level performance, head-to-head comparisons and running times.
+
+\begin{figure}[h]
+  \centering
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/section_5_results_cls_10k.pdf}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/section_5_results_cls_100k.pdf}
+  \end{subfigure}
+  \caption{Comparison of normalized scores with 95\% CIs between TabSTAR and baseline models in classification tasks, evaluated on up to 10,000 examples (left) and above 10,000 (right).}
+  \label{fig:main_results_classification}
+\end{figure}
+
+\textbf{In classification problems, TabSTAR consistently achieves SOTA performance.} This is evident both when restricting the dataset size to 10,000 examples and when using larger datasets in the unlimited condition. For the 10K condition, TabSTAR achieves a 0.809 score, performing better than TabPFN-v2 (0.783) and significantly better than GBDTs (0.756 CatBoost-Tuned, 0.744 XGB-Tuned). When analyzing head-to-head comparisons (Appendix~\appref{app:res:head_to_head}), TabSTAR outperforms TabPFN-v2 (7/11 datasets), XGB-Tuned (10/14) and CatBoost-Tuned (11/14). For the Unlimited condition, TabSTAR-Unlimit achieves a 0.874 score, significantly above the second-best CatBoost-Tuned-Unlimit with 0.734. Importantly, all Unlimit variants surpass the 10K ones, emphasizing the importance of scaling.
+
+\begin{figure}[h]
+  \centering
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+   \includegraphics[width=\textwidth]{figures/section_5_results_reg_10k.pdf}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/section_5_results_reg_100k.pdf}
+  \end{subfigure}
+  \caption{Comparison of normalized scores with 95\% CIs between TabSTAR and baseline models in regression tasks, evaluated on up to 10,000 examples (left) and above 10,000 (right).}
+  \label{fig:main_results_regression}
+\end{figure}
+
+Although regression is not our main focus, TabSTAR achieves competitive results in the 10K condition, but clearly does not set the SOTA. Surprisingly, while TabPFN-v2 is superior, it significantly underperforms compared to GBDTs which dominate this category. This emphasizes the need for better modeling of textual tabular learning, especially since TabPFN-v2 has shown remarkable performance in non-textual tabular datasets, and CARTE set the SOTA for small datasets. When analyzing the Unlimited variants, TabSTAR scales well, and surpasses other TFMs which cannot scale, but the gap from GBDTs remains significant. \S\ref{sec:discussion} discusses this limitation and suggests promising directions for future generations of TabSTAR to achieve SOTA in regression as well.
+
+\section{Analysis}\label{sec:analysis}
+We analyze the factors contributing to TabSTAR’s strong performance by addressing three key research questions: \textbf{Q1:} How important is the encoder language model unfreezing? \textbf{Q2:} Does the number of datasets during pretraining contribute to the downstream task performance? 
+and \textbf{Q3:} How do different verbalization methods of numerical features impact performance?
+
+
+To answer these questions, we pretrain several variants of TabSTAR for each analysis, limiting ourselves to a subset of the tabular datasets used for the main experiment (see \S\ref{sec:main_experiments}). Specifically, each variant is pretrained over 256 datasets\footnote{Except for variants of Q2, which analyze the effect of number of datasets on pretraining.} including 30 datasets from our benchmark, and evaluated over the remaining 20 datasets (12 regression, 8 classification). This reduced setup allows leveraging transfer learning and exploiting our corpus, without the burden of training multiple folds per variant. Results are reported with the same normalized metric used in \S\ref{sec:results}, scaling the performance to the $[0, 1]$ range. Appendix~\appref{app:analysis_datasets} lists the 20 datasets used for evaluation along with per-dataset results. 
+
+
+\begin{figure}[h]
+  \centering
+
+    \includegraphics[width=0.79\textwidth]{figures/e5_unfreeze_all.pdf}
+
+
+  \caption{Performance as a function of the number of encoder layers unfrozen: Validation loss during TabSTAR's pretraining (left) and normalized scores with 95\% CIs on the downstream tasks (right). Unfreezing even a single encoder layer significantly improves the performance of TabSTAR.}
+  \label{fig:e5_pretrain}
+\end{figure}
+
+\paragraph{Q1: The Role of the Encoder Unfreezing}\label{analysis:e5_layers}
+To investigate whether unfreezing layers of the textual encoder impacts performance, we conduct experiments where we unfreeze varying numbers of the 12 encoder layers during both TabSTAR's pretraining and finetuning stages.\footnote{For each variant, the number of unfrozen layers remains the same in both pretraining and finetuning.} Figure~\ref{fig:e5_pretrain} shows the validation loss during TabSTAR pretraining (left) and the normalized score on the downstream tasks (right) as a function of the number of unfrozen encoder layers. Notably, unfreezing even a single encoder layer significantly outperforms using static embeddings. Further substantial improvements are observed as more layers are tuned, with the best results achieved when unfreezing 6 layers. While unfreezing 9 layers shows lower performance, it is plausible that adding more datasets to the pretraining phase will affect this finding. See Appendix~\appref{app:analysis_unfreeze} for more details. 
+
+\begin{table}[ht]
+\centering
+\caption{Normalized score with 95\% CIs by the number of datasets used during TabSTAR pretraining.}
+\label{tab:scaling_laws}
+\begin{tabular}{lcccc}
+\toprule
+Pretraining Datasets & 0     & 16     & 64     & 256   \\
+\midrule
+Classification   & 0.352 ± 0.086 & 0.450 ± 0.084  & 0.558 ± 0.086  & 0.786 ± 0.076 \\
+Regression  & 0.338 ± 0.073 & 0.395 ± 0.068 & 0.642 ± 0.066 & 0.811 ± 0.055 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Q2: The Effect of Pretraining}\label{analysis:scaling}
+
+To evaluate the impact of pretraining on TabSTAR's downstream performance, we compare a pretrained version of TabSTAR with a version that was finetuned from scratch.\footnote{Since LoRA underperforms on random weights, we finetune the entire non-pretrained model.} In line with previous work \cite{zhu_xtab_2023, ye_towards_2024}, the pretrained model performs significantly better, highlighting the critical role of transfer learning for TabSTAR's success. To further investigate the effect of the number of pretraining datasets on downstream task performance, we train two additional versions: one pretrained on 16 datasets and another on 64 datasets. As shown in Table~\ref{tab:scaling_laws}, increasing the number of pretraining datasets consistently improved performance in both classification and regression tasks. Notably, the substantial gain in regression tasks suggests that TabSTAR's downstream performance on \S\ref{sec:results} could improve with more pretraining data (see Appendix~\appref{app:analysis_scaling}).
+
+\paragraph{Q3: Numerical Verbalization} \label{par:numerical-verbalization}
+A key challenge in integrating language models with numerical data is determining how to best represent numerical values within a linguistic framework. While some semantic tabular methods omit numerical features from the verbalization \cite{wang_transtab_2022, ye_towards_2024}, TP-BERTa \cite{yan_making_2023} introduced \textit{Relative Magnitude Tokenization} \cite{yan_making_2023}, which encode numerical information through non-semantic special bin tokens. In constrast, TabSTAR injects semantic numerical information into the verbalization of numerical features, as illustrated in Table~\ref{tab:patient_verbalization}. To quantify the effect of our novel verbalization, we explore two thinner variants: (1) \textbf{Name + Bin}, which excludes the quantile information, and (2) \textbf{Name}, which omits numeric information entirely and verbalizes the feature name only. Appendix~\appref{app:analysis_numerical} shows an illustrative example for each variant and presents the full results. As demonstrated in Table~\ref{tab:exp_verbalization}, our findings reveal that incorporating numerical information significantly enhances performance, highlighting the importance of balancing numerical precision with a representation format that aligns with the language model’s parametric knowledge.
+
+\begin{table}[ht]
+\centering
+\caption{Normalized score with 95\% CIs by the numerical verbalization method.}
+\label{tab:exp_verbalization}
+\begin{tabular}{lcccc}
+\toprule
+Verbalization Method & Name  & Name + Bin     & TabSTAR  \\
+\midrule
+Classification   & 0.386 ± 0.095 & 0.544 ± 0.093  & 0.593 ± 0.097   \\
+Regression  & 0.386 ± 0.081 & 0.584 ± 0.076 & 0.596 ± 0.079 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion and Conclusion}
+\label{sec:discussion}
+We introduce TabSTAR, a Tabular Foundation Model with Semantically Target-Aware Representations, which integrates textual features through an unfrozen pretrained encoder. In addition, its novel target-aware tokens enable efficient cross-dataset generalization without dataset-specific parameters. Despite limited pretraining data and a relatively small text encoder \cite{wang_text_2024}, TabSTAR sets the SOTA in tabular classification with textual features, significantly surpassing GBDTs and leading TFMs. 
+
+Since scaling laws in data and model size have proven themselves for LLMs \cite{kaplan_scaling_2020} and TabSTAR improves with the number of pretraining datasets (see \S\ref{analysis:scaling}), future work should scale TabSTAR across both model and data dimensions. For model scaling, we envision a family of model sizes, common for LLMs \cite{grattafiori_llama_2024, team_gemini_2025, lenz_jamba_2024}, that will allow a trade-off between quality and costs. Data scaling might leverage self-supervised learning \cite{rubachev_revisiting_2022} over large-scale table corpora \cite{eggert_tablib_2023}, or realistic synthetic tabular data generators \cite{borisov_language_2022}, which have proven successful \cite{hollmann_accurate_2025, ansari_chronos_2024}. At scale, it could potentially unlock few-shot learning capabilities and develop automatic feature-engineering skills \cite{hollmann_large_2023}.
+
+Beyond scaling, TabSTAR's semantic approach has tremendous potential to explicitly include world knowledge, by leveraging LLMs which to date have had limited impact on tabular learning. As a few motivating examples, LLMs could improve TabSTAR's numerical verbalization binning approach by providing semantically informed thresholds, or provide explicit, contextual world knowledge that could be injected as a strong prior in small data scenarios. While these directions seem like plausible research paths, they come with a risk of data leakage due to the memorization properties of LLMs \cite{bordt_elephants_2024}. Evaluating TFMs fairly while keeping benchmarks uncontaminated would be an important enabler for tabular research. As a step in this direction, we are releasing several TabSTAR variants, each with a different dataset withheld during pretraining, ensuring that for every dataset there is a TabSTAR model that has never seen it. We urge fellow researchers to adopt this approach in their own work.
+
+While TabSTAR sets a new bar in classification, its regression results lag behind GBDTs, which outperform other TFMs as well. This gap could be narrowed through additional scaling, and also by exploring regression-via-classification techniques like \cite{hollmann_accurate_2025, ansari_chronos_2024}. Furthermore, TabSTAR has not been extensively evaluated in few-shot scenarios and in purely numerical datasets.\footnote{Partly because of the computational burden of tuning baselines, and the lack of objective leaderboards \cite{tschalzev_unreflected_2025}.} In addition, it demands more compute compared to GBDTs, and it may struggle with memory constraints on datasets containing hundreds of features. Despite these limitations, TabSTAR offers a promising pathway toward improving performance on tabular datasets with textual fields, common in industries with high social impact (e.g., healthcare, education), or with significant economic value (e.g., banking, manufacturing). We believe TabSTAR paves the way for a new generation of semantically enriched tabular models, and we welcome the research community's innovations built on this foundation.
+
+\begin{ack}
+We thank Omri Feldman for brainstorming since the very beginning; Elad Hoffer and Ofir Lindenbaum for consulting and feedback; David Holzmüller and Myung Kim for supporting evaluations; and Noah Hollmann, Léo Grinsztajn, and the Prior Labs team for providing extensive access to TabPFN-v2.
+\end{ack}
+
+\bibliographystyle{plainnat}
+\bibliography{neurips_2025}
+
+\clearpage
+\input{appendixes}
+
+
+
+% \clearpage
+% \input{neurips_checklist}
+
+\end{document}

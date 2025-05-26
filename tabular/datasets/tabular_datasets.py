@@ -406,9 +406,13 @@ class UrlDatasetID(StrEnum):
     REG_SOCIAL_BOOKS_GOODREADS = "http://pages.cs.wisc.edu/~anhai/data/784_data/books2/csv_files/goodreads.csv"
     REG_SOCIAL_MOVIES_ROTTEN_TOMATOES = "http://pages.cs.wisc.edu/~anhai/data/784_data/movies1/csv_files/rotten_tomatoes.csv"
 
+class CustomDatasetID(StrEnum):
+    """Custom local CSV datasets"""
+    CUSTOM_CSV = "custom_csv"
 
-TabularDatasetID = OpenMLDatasetID | KaggleDatasetID | UrlDatasetID
-ALL_DATASETS = list(OpenMLDatasetID) + list(KaggleDatasetID) + list(UrlDatasetID)
+
+TabularDatasetID = OpenMLDatasetID | KaggleDatasetID | UrlDatasetID | CustomDatasetID
+ALL_DATASETS = list(OpenMLDatasetID) + list(KaggleDatasetID) + list(UrlDatasetID) + list(CustomDatasetID)
 
 
 def get_sid(dataset: TabularDatasetID) -> str:
@@ -416,6 +420,8 @@ def get_sid(dataset: TabularDatasetID) -> str:
         return f"{dataset.value}_{dataset.name}"
     elif isinstance(dataset, (KaggleDatasetID, UrlDatasetID)):
         return f"{dataset.name}".replace('/', '__')
+    elif isinstance(dataset, CustomDatasetID):
+        return f"custom_{dataset.name}"
     raise ValueError(f"Invalid dataset type: {dataset}")
 
 
@@ -424,6 +430,11 @@ def get_dataset_from_arg(arg: str | int) -> TabularDatasetID:
         arg = int(arg)
     if arg is None:
         raise ValueError("Dataset ID cannot be None.")
+    
+    # Handle custom dataset case
+    if arg == "custom" or arg == "custom_csv":
+        return CustomDatasetID.CUSTOM_CSV
+    
     dataset = [d for d in ALL_DATASETS if d.value == arg]
     assert len(dataset) == 1, f"Dataset {arg} not found."
     dataset = dataset[0]
