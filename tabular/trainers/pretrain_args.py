@@ -28,6 +28,18 @@ class PretrainArgs:
     full_exp_name: Optional[str] = None
     cached: bool = False
     num_datasets: int = 0
+    # Additional fields from pretrain_args.json
+    e5: Optional[str] = None
+    tabular_encoder_type: Optional[str] = None
+    numbers_fusion: Optional[str] = None
+    bert_lr_factor: Optional[float] = None
+    weight: Optional[str] = None
+    light: Optional[bool] = None
+    debug: Optional[bool] = None
+    max_epoch_examples: Optional[int] = None
+    scheduler: Optional[str] = None
+    num_folds: Optional[int] = None
+    p_mask: Optional[float] = None
 
     def __post_init__(self):
         if self.cached:
