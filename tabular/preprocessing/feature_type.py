@@ -85,6 +85,12 @@ def convert_dtypes(x: DataFrame, feature_types: Dict[FeatureType, Set[str]], cur
 def get_feature_types(x: DataFrame, curation: CuratedDataset, feat_types: Dict[str, FeatureType]) -> Dict[FeatureType, Set[str]]:
     feature_types = {f: set() for f in FeatureType}
     for col in x.columns:
+        # Check if column is entirely NaN and mark as unsupported
+        if x[col].isna().all():
+            verbose_print(f"🚫 Column {col} contains only NaN values - marking as UNSUPPORTED")
+            feature_types[FeatureType.UNSUPPORTED].add(col)
+            continue
+            
         stats = ValueStats.from_values(series=x[col])
         curated = curation.get_feature(col)
         assumed_type = feat_types[col]
@@ -92,6 +98,8 @@ def get_feature_types(x: DataFrame, curation: CuratedDataset, feat_types: Dict[s
         verbose_print(f"{FEAT2EMOJI[feat_type]} Feature {feat_type} | {stats}")
         feature_types[feat_type].add(col)
     unsupported = list(feature_types.pop(FeatureType.UNSUPPORTED))
+    if unsupported:
+        verbose_print(f"🗑️ Dropping {len(unsupported)} unsupported columns: {unsupported[:10]}{'...' if len(unsupported) > 10 else ''}")
     x.drop(columns=unsupported, inplace=True)
     return feature_types
 

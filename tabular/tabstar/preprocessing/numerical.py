@@ -14,7 +14,7 @@ from tabular.utils.utils import verbose_print
 def scale_x_num_and_add_categorical_bins(raw: RawDataset, splits: List[DataSplit],
                                          number_verbalization: NumberVerbalization) -> Tuple[DataFrame, np.ndarray]:
     verbose_print(f"Scaling {len(raw.numerical)} numerical features for {raw.sid}")
-    x_num = np.zeros(shape=raw.x.shape, dtype=np.float32)
+    x_num = np.zeros(shape=(raw.x.shape[0], len(raw.numerical)), dtype=np.float32)
     sorted_cols = raw.numerical + raw.bool_cat_text
     x_train = get_x_train(x=raw.x, splits=splits)
     for i, col in enumerate(raw.numerical):
