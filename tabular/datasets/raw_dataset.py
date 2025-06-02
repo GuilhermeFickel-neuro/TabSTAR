@@ -28,8 +28,10 @@ class RawDataset:
     def __post_init__(self):
         assert len(self.x) == len(self.y)
         self.verify_unique_col_names()
-        if len(self.x.columns) > MAX_FEATURES:
-            raise ValueError(f"⚠️⚠️⚠️ Dataset {self.sid} has {len(self.x.columns)} features, we allow {MAX_FEATURES=}!")
+        # Allow more features for custom datasets since users should control their own data
+        max_features_allowed = 10000 if self.sid.startswith("custom_") else MAX_FEATURES
+        if len(self.x.columns) > max_features_allowed:
+            raise ValueError(f"⚠️⚠️⚠️ Dataset {self.sid} has {len(self.x.columns)} features, we allow max_features_allowed={max_features_allowed}!")
 
     def verify_unique_col_names(self):
         all_cols = list(self.x.columns) + [self.y.name]
