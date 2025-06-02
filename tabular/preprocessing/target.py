@@ -33,7 +33,9 @@ def handle_raw_target(x: DataFrame, y: Optional[Series], curation: CuratedDatase
     y = _curate_target_values(y=y, target=curation.target, task_type=task_type)
     if task_type == SupervisedTask.MULTICLASS:
         x, y = _remove_rare_target_rows(x=x, y=y, sid=sid)
-    assert _get_sid_task_type(sid) == task_type
+    # Skip task type validation for custom datasets since they determine task type from data
+    if not sid.startswith("custom_"):
+        assert _get_sid_task_type(sid) == task_type
     return x, y, task_type
 
 
