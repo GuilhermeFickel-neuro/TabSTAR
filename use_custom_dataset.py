@@ -46,13 +46,13 @@ def main():
         import pandas as pd
         # Try to detect separator
         try:
-            df = pd.read_csv(args.csv_path, sep='\t')
+            df = pd.read_csv(args.csv_path, sep='\t', low_memory=False)
             if len(df.columns) == 1:
                 # Likely not tab-separated, try comma
-                df = pd.read_csv(args.csv_path)
+                df = pd.read_csv(args.csv_path, low_memory=False)
         except:
             # Fallback to default comma separator
-            df = pd.read_csv(args.csv_path)
+            df = pd.read_csv(args.csv_path, low_memory=False)
             
         if args.target_column not in df.columns:
             print(f"Error: Target column '{args.target_column}' not found in CSV.")

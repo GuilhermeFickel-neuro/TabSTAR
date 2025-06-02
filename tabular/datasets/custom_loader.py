@@ -32,14 +32,14 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
     # Load the CSV file - try to detect separator
     try:
         # First try with tab separator
-        df = pd.read_csv(csv_path, sep='\t')
+        df = pd.read_csv(csv_path, sep='\t', low_memory=False)
         if len(df.columns) == 1:
             # Likely not tab-separated, try comma
-            df = pd.read_csv(csv_path)
+            df = pd.read_csv(csv_path, low_memory=False)
     except Exception as e:
         # Fallback to default comma separator
         try:
-            df = pd.read_csv(csv_path)
+            df = pd.read_csv(csv_path, low_memory=False)
         except Exception as e2:
             raise ValueError(f"Could not read CSV file: {e2}")
     
@@ -51,28 +51,27 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
     y = df[target_column]
     
     # Create a basic curation object (you can customize this)
-    from tabular.datasets.manual_curation_obj import CuratedDataset
+    from tabular.datasets.manual_curation_obj import CuratedDataset, CuratedTarget, CuratedFeature
+    from tabular.preprocessing.objects import SupervisedTask
+    
+    # Create target specification
+    target = CuratedTarget(
+        raw_name=target_column,
+        task_type=SupervisedTask.REGRESSION  # Will be auto-detected later
+    )
+    
+    # Create basic feature specifications for all columns
+    features = []
+    for col in x.columns:
+        features.append(CuratedFeature(raw_name=col))
+    
     curation = CuratedDataset(
-        target=target_column,
-        description=description,
-        drop_columns=[],
-        categorical_columns=[],
-        text_columns=[],
-        ordinal_columns={},
-        binary_columns=[],
-        date_columns=[],
-        id_columns=[],
-        constant_columns=[],
-        high_cardinality_columns=[],
-        skewed_columns=[],
-        outlier_columns=[],
-        missing_columns=[],
-        correlated_columns=[],
-        redundant_columns=[],
-        leaky_columns=[],
-        noisy_columns=[],
-        irrelevant_columns=[],
-        task_type=None  # Will be auto-detected
+        name=f"custom_{os.path.basename(csv_path)}",
+        target=target,
+        features=features,
+        cols_to_drop=[],
+        context=description or "Custom dataset for TabSTAR finetuning",
+        description=description
     )
     
     # Get dataset description
