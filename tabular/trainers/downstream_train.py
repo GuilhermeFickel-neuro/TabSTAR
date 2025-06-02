@@ -38,7 +38,7 @@ class ModelTrainer:
 
     def __init__(self, dataset_id: TabularDatasetID, model_cls: Type[TabularModel], exp_name: str, device: torch.device,
                  run_num: int, train_examples: int, args: Optional[PretrainArgs | FinetuneArgs] = None,
-                 carte_lr_idx: Optional[int] = None, custom_csv_path: str = None, custom_target_column: str = None):
+                 carte_lr_idx: Optional[int] = None, custom_csv_path: str = None, custom_target_column: str = None, custom_max_features: int = 2500):
         self.model_cls = model_cls
         self.dataset_id = dataset_id
         self.exp_name = exp_name
@@ -52,6 +52,7 @@ class ModelTrainer:
         self.carte_lr_idx = carte_lr_idx
         self.custom_csv_path = custom_csv_path
         self.custom_target_column = custom_target_column
+        self.custom_max_features = custom_max_features
 
     def existing_score(self) -> Optional[RunMetadata]:
         if exists(self.res_path):
@@ -63,7 +64,7 @@ class ModelTrainer:
         model = self.model_cls(run_name=self.run_name, dataset_ids=[self.dataset_id], device=self.device,
                                run_num=self.run_num, args=self.args, train_examples=self.train_examples,
                                carte_lr_index=self.carte_lr_idx, custom_csv_path=self.custom_csv_path,
-                               custom_target_column=self.custom_target_column)
+                               custom_target_column=self.custom_target_column, custom_max_features=self.custom_max_features)
         model.initialize_model()
         dev_loss = model.train()
         test_results = model.test()

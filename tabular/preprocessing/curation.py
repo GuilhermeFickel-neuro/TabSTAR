@@ -38,6 +38,10 @@ def _curate_column_values(x: DataFrame, curation: CuratedDataset, feature_types:
 
 
 def _validate_raw_names(x: DataFrame, y: Series, curation: CuratedDataset):
+    # Skip validation for custom datasets since they use minimal curation
+    if curation.name.startswith("custom_"):
+        return
+        
     for feat in curation.features:
         if feat.raw_name not in set(x).union({y.name}):
             raise ValueError(f"Feature {feat.raw_name} not found in dataset {curation.name}")

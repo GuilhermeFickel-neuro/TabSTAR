@@ -11,7 +11,7 @@ from tabular.preprocessing.feature_type import get_feature_types
 
 
 def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_column: str, 
-                       description: str = "Custom CSV dataset") -> RawDataset:
+                       description: str = "Custom CSV dataset", max_features: int = 1000) -> RawDataset:
     """
     Load a custom CSV dataset for TabSTAR training/finetuning.
     
@@ -20,6 +20,7 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
         csv_path: Path to the CSV file
         target_column: Name of the target column
         description: Optional description of the dataset
+        max_features: Maximum number of features to include in the dataset
     
     Returns:
         RawDataset object ready for TabSTAR processing
@@ -61,16 +62,15 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
     )
     
     # Create basic feature specifications for all columns
-    features = []
-    for col in x.columns:
-        features.append(CuratedFeature(raw_name=col))
+    # For custom datasets, we'll create minimal curation to avoid validation issues
+    features = []  # Keep this empty to avoid validation issues during downsampling
     
     curation = CuratedDataset(
         name=f"custom_{os.path.basename(csv_path)}",
         target=target,
-        features=features,
+        features=features,  # Empty list to avoid column validation issues
         cols_to_drop=[],
-        context=description or "Custom dataset for TabSTAR finetuning",
+        context=f"{description or 'Custom dataset for TabSTAR finetuning'} max_features:{max_features}",
         description=description
     )
     

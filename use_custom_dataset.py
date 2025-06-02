@@ -29,6 +29,8 @@ def main():
                        help='Run number (for multiple runs)')
     parser.add_argument('--downstream_examples', type=int, default=1000,
                        help='Number of training examples to use')
+    parser.add_argument('--custom_max_features', type=int, default=2500,
+                       help='Maximum number of features for custom datasets (default: 2500)')
     
     args = parser.parse_args()
     
@@ -84,7 +86,8 @@ def main():
         '--custom_target_column', args.target_column,
         '--exp', args.exp_name,
         '--run_num', str(args.run_num),
-        '--downstream_examples', str(args.downstream_examples)
+        '--downstream_examples', str(args.downstream_examples),
+        '--custom_max_features', str(args.custom_max_features)
     ]
     
     print(f"\n🚀 Running TabSTAR finetuning with custom dataset...")

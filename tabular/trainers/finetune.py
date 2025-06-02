@@ -22,7 +22,8 @@ def do_finetune_run(exp_name: str,
                     finetune_args: Optional[FinetuneArgs] = None,
                     carte_lr_idx: Optional[int] = None,
                     custom_csv_path: str = None,
-                    custom_target_column: str = None) -> RunMetadata:
+                    custom_target_column: str = None,
+                    custom_max_features: int = 2500) -> RunMetadata:
     if device is None:
         device = torch.device(get_device())
     if isinstance(finetune_args, FinetuneArgs):
@@ -32,7 +33,7 @@ def do_finetune_run(exp_name: str,
     trainer = ModelTrainer(dataset_id=dataset, model_cls=model, exp_name=exp_name, device=device,
                            run_num=run_num, args=finetune_args, train_examples=train_examples,
                            carte_lr_idx=carte_lr_idx, custom_csv_path=custom_csv_path,
-                           custom_target_column=custom_target_column)
+                           custom_target_column=custom_target_column, custom_max_features=custom_max_features)
     if run_metadata := trainer.existing_score():
         cprint(f"Already trained {model.MODEL_NAME} on {dataset.name} for run {run_num}: {run_metadata.test_score:.3f}")
         return run_metadata

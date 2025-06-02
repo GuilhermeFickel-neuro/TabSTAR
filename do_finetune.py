@@ -20,7 +20,8 @@ def finetune_tabstar(finetune_args: FinetuneArgs,
                      train_examples: int = DOWNSTREAM_EXAMPLES,
                      device: Optional[torch.device] = None,
                      custom_csv_path: str = None,
-                     custom_target_column: str = None):
+                     custom_target_column: str = None,
+                     custom_max_features: int = 2500):
     if device is None:
         device = torch.device(get_device())
     if dataset.value in finetune_args.pretrain_args.datasets:
@@ -28,7 +29,7 @@ def finetune_tabstar(finetune_args: FinetuneArgs,
     do_finetune_run(dataset=dataset, model=TabStarTrainer, run_num=run_num, device=device,
                     finetune_args=finetune_args, exp_name=finetune_args.full_exp_name,
                     train_examples=train_examples, custom_csv_path=custom_csv_path,
-                    custom_target_column=custom_target_column)
+                    custom_target_column=custom_target_column, custom_max_features=custom_max_features)
 
 
 
@@ -48,6 +49,7 @@ if __name__ == "__main__":
     # Custom dataset arguments
     parser.add_argument('--custom_csv_path', type=str, help='Path to custom CSV file (required when dataset_id is "custom")')
     parser.add_argument('--custom_target_column', type=str, help='Name of target column in custom CSV (required when dataset_id is "custom")')
+    parser.add_argument('--custom_max_features', type=int, default=1000, help='Maximum number of features for custom datasets (default: 1000)')
 
     args = parser.parse_args()
     assert args.pretrain_exp, "Pretrain path is required"
@@ -66,4 +68,5 @@ if __name__ == "__main__":
     run_args = FinetuneArgs.from_args(args=args, pretrain_args=pretrain_args, exp_name=args.exp)
     finetune_tabstar(finetune_args=run_args, dataset=data,
                      run_num=args.run_num, train_examples=args.downstream_examples,
-                     custom_csv_path=args.custom_csv_path, custom_target_column=args.custom_target_column)
+                     custom_csv_path=args.custom_csv_path, custom_target_column=args.custom_target_column,
+                     custom_max_features=args.custom_max_features)
