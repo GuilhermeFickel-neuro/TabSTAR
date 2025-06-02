@@ -29,8 +29,19 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
     
     sid = get_sid(dataset_id)
     
-    # Load the CSV file
-    df = pd.read_csv(csv_path)
+    # Load the CSV file - try to detect separator
+    try:
+        # First try with tab separator
+        df = pd.read_csv(csv_path, sep='\t')
+        if len(df.columns) == 1:
+            # Likely not tab-separated, try comma
+            df = pd.read_csv(csv_path)
+    except Exception as e:
+        # Fallback to default comma separator
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception as e2:
+            raise ValueError(f"Could not read CSV file: {e2}")
     
     if target_column not in df.columns:
         raise ValueError(f"Target column '{target_column}' not found in CSV. Available columns: {list(df.columns)}")

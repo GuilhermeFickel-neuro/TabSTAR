@@ -44,7 +44,16 @@ def main():
     # Quick validation of CSV structure
     try:
         import pandas as pd
-        df = pd.read_csv(args.csv_path)
+        # Try to detect separator
+        try:
+            df = pd.read_csv(args.csv_path, sep='\t')
+            if len(df.columns) == 1:
+                # Likely not tab-separated, try comma
+                df = pd.read_csv(args.csv_path)
+        except:
+            # Fallback to default comma separator
+            df = pd.read_csv(args.csv_path)
+            
         if args.target_column not in df.columns:
             print(f"Error: Target column '{args.target_column}' not found in CSV.")
             print(f"Available columns: {list(df.columns)}")
@@ -55,6 +64,13 @@ def main():
         print(f"   - Columns: {len(df.columns)}")
         print(f"   - Target: {args.target_column}")
         print(f"   - Features: {len(df.columns) - 1}")
+        
+        # Check for NaN values
+        nan_counts = df.isna().sum()
+        if nan_counts.any():
+            print(f"\n⚠️  Warning: Found NaN values in the following columns:")
+            for col, count in nan_counts[nan_counts > 0].items():
+                print(f"   - {col}: {count} NaN values")
     except Exception as e:
         print(f"Error reading CSV file: {e}")
         sys.exit(1)
