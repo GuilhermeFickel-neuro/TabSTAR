@@ -53,3 +53,7 @@ def get_current_commit_hash() -> str:
     except subprocess.CalledProcessError:
         print(f"🆔 Could not get the current commit hash.")
         return ""
+
+def str_float(f: float) -> str:
+    """Converts a float to a string, replacing '.' with '' to be filename-safe."""
+    return str(f).replace('.', '')

@@ -92,7 +92,3 @@ class PretrainArgs:
         if self.fold is not None:
             strings.append(f"fold_{self.fold}")
         return LOG_SEP.join(strings)
-
-
-def str_float(f: float) -> str:
-    return str(f).replace('.', '')
