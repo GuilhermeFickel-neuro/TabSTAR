@@ -53,12 +53,11 @@ def load_finetuned_model(pretrain_exp: str, exp_name: str, lora_lr: float,
     mock_args = MockArgs()
     finetune_args = FinetuneArgs.from_args(args=mock_args, exp_name=exp_name, pretrain_args=pretrain_args)
     
-    # Now construct the full run_name following ModelTrainer.run_name pattern
+    # Now construct the additional ModelTrainer components (without exp_name to avoid duplication)
     dataset_id = CustomDatasetID.CUSTOM_CSV
     model_short_name = "Tab*"  # TabStarTrainer.SHORT_NAME
     
     run_name_components = [
-        exp_name,
         sanitize_filename_component(model_short_name),
         f"sid_{sanitize_filename_component(get_sid(dataset_id))}",
         f"run_{run_num}",
