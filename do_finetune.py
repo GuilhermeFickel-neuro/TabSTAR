@@ -41,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument('--exp', type=str, default="default_finetune_exp")
     parser.add_argument('--run_num', type=int, default=0)
     parser.add_argument('--downstream_examples', type=int, default=DOWNSTREAM_EXAMPLES)
-    parser.add_argument('--downstream_keep_model', action='store_true', default=False)
+    parser.add_argument('--downstream_keep_model', type=bool, default=True)
     parser.add_argument('--downstream_patience', type=int, default=FINETUNE_PATIENCE)
     parser.add_argument('--lora_lr', type=float, default=LORA_LR)
     parser.add_argument('--lora_batch', type=int, default=LORA_BATCH)
