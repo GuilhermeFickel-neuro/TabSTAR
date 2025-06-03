@@ -1,182 +1,295 @@
 import argparse
 import os
-import torch
-import pandas as pd
-import numpy as np
-from sklearn.metrics import roc_auc_score, mean_squared_error
+from typing import Optional, Dict
 
-# TabSTAR imports
-from tabular.datasets.tabular_datasets import TabularDatasetID
-from tabular.datasets.properties import DatasetProperties
-from tabular.datasets.paths import get_data_dir
-from tabular.evaluation.metrics import calculate_ks_metric
+import numpy as np
+import pandas as pd
+import torch
+from sklearn.metrics import roc_auc_score, r2_score
+
+from tabular.datasets.tabular_datasets import TabularDatasetID, CustomDatasetID
+from tabular.datasets.torch_dataset import get_data_dir, get_properties, HDF5Dataset
 from tabular.evaluation.loss import apply_loss_fn
-from tabular.preprocessing.preprocessor import Preprocessor
+from tabular.evaluation.metrics import calculate_metric, calculate_ks_metric, PredictionsCache
+from tabular.preprocessing.objects import SupervisedTask
+from tabular.preprocessing.splits import DataSplit
+from tabular.tabstar.arch.arch import TabStarModel
+from tabular.tabstar.params.config import TabStarConfig
 from tabular.tabstar.tabstar_trainer import TabStarTrainer
-from tabular.tabstar.params.constants import LORA_R, LORA_LR, LORA_BATCH # Default LoRA params
 from tabular.trainers.finetune_args import FinetuneArgs
 from tabular.trainers.pretrain_args import PretrainArgs
+from tabular.utils.dataloaders import get_dataloader
 from tabular.utils.gpus import get_device
-from tabular.preprocessing.splits import DataSplit
-from tabular.utils.early_stopping import FINETUNE_PATIENCE
-from tabular.evaluation.constants import DOWNSTREAM_EXAMPLES
-from tabular.utils.utils import cprint
-from tabular.preprocessing.objects import SupervisedTask, PreprocessingMethod
+from tabular.utils.paths import get_model_path
+from tabular.utils.utils import cprint, verbose_print, fix_seed
+from peft import PeftModel
 
 
-def run_inference():
-    parser = argparse.ArgumentParser(description="Run inference with a fine-tuned TabSTAR model.")
-    parser.add_argument('--pretrain_exp', type=str, required=True, help="Name of the pretraining experiment (for base model).")
-    parser.add_argument('--finetune_exp', type=str, required=True, help="Name of the fine-tuning experiment (for LoRA adapter and config).")
+def load_finetuned_model(pretrain_exp: str, exp_name: str, lora_lr: float, 
+                        lora_batch: int, lora_r: int, patience: int, device: torch.device) -> TabStarModel:
+    """Load the finetuned TabSTAR model (base model + LoRA adapter)"""
     
-    parser.add_argument('--original_finetune_custom_csv_path', type=str, required=True, 
-                        help="Path to the custom CSV file that was used for the original fine-tuning. Needed to load the correct preprocessor.")
+    # Load pretrain args to get the base model path
+    pretrain_args = PretrainArgs.from_json(pretrain_exp=pretrain_exp)
+    base_model_dir = get_model_path(pretrain_exp, is_pretrain=True)
     
-    parser.add_argument('--inference_custom_csv_path', type=str, required=True, help="Path to the new custom CSV file for inference.")
-    parser.add_argument('--inference_target_column', type=str, required=True, help="Name of the target column in the inference CSV.")
+    if not os.path.exists(base_model_dir):
+        raise FileNotFoundError(f"Base model directory not found: {base_model_dir}")
     
-    parser.add_argument('--custom_max_features', type=int, default=2500, help="Maximum number of features for the preprocessor.")
+    # Construct finetune args to get the LoRA adapter path
+    from tabular.tabstar.params.constants import LORA_BATCH, LORA_R
     
-    parser.add_argument('--lora_r', type=int, default=LORA_R, help="LoRA R parameter.")
-    parser.add_argument('--lora_lr', type=float, default=LORA_LR, help="LoRA learning rate.")
-    parser.add_argument('--lora_batch', type=int, default=LORA_BATCH, help="LoRA batch size.")
-    parser.add_argument('--run_num', type=int, default=0, help="Run number (for FinetuneArgs consistency).")
-    parser.add_argument('--downstream_examples', type=int, default=DOWNSTREAM_EXAMPLES, help="Downstream examples (for FinetuneArgs consistency).")
-    parser.add_argument('--downstream_patience', type=int, default=FINETUNE_PATIENCE, help="Downstream patience (for FinetuneArgs consistency).")
-    parser.add_argument('--downstream_keep_model', action='store_true', default=True, help="FinetuneArgs consistency, effectively true for loading.")
+    # Create a mock args object for FinetuneArgs construction
+    class MockArgs:
+        def __init__(self):
+            self.lora_lr = lora_lr
+            self.lora_batch = lora_batch if lora_batch is not None else LORA_BATCH
+            self.lora_r = lora_r if lora_r is not None else LORA_R
+            self.downstream_keep_model = True
+            self.downstream_patience = patience
+    
+    mock_args = MockArgs()
+    finetune_args = FinetuneArgs.from_args(args=mock_args, exp_name=exp_name, pretrain_args=pretrain_args)
+    adapter_dir = get_model_path(finetune_args.full_exp_name, is_pretrain=False)
+    
+    if not os.path.exists(adapter_dir):
+        raise FileNotFoundError(f"LoRA adapter directory not found: {adapter_dir}")
+    
+    cprint(f"🔄 Loading base model from: {base_model_dir}")
+    base_model = TabStarModel.from_pretrained(base_model_dir)
+    
+    cprint(f"🔄 Loading LoRA adapter from: {adapter_dir}")
+    model = PeftModel.from_pretrained(base_model, adapter_dir)
+    model.to(device)
+    
+    cprint(f"✅ Successfully loaded finetuned model")
+    return model
+
+
+def process_test_csv(csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
+                    run_num: int, device: torch.device, custom_max_features: int = 3000) -> str:
+    """Process the test CSV using the same preprocessing pipeline as training"""
+    
+    # Create a custom dataset ID for the test data
+    test_dataset_id = CustomDatasetID.CUSTOM_CSV
+    
+    # Get the data directory (this will create and cache the processed dataset)
+    data_dir = get_data_dir(
+        dataset=test_dataset_id,
+        processing=TabStarTrainer.PROCESSING,
+        run_num=run_num,
+        train_examples=-1,  # Use all available data
+        device=device,
+        number_verbalization=pretrain_args.numbers_verbalization,
+        custom_csv_path=csv_path,
+        custom_target_column=target_column,
+        custom_max_features=custom_max_features
+    )
+    
+    return data_dir
+
+
+def run_inference(model: TabStarModel, data_dir: str, device: torch.device) -> Dict:
+    """Run inference on the test data and calculate metrics"""
+    
+    # Get dataset properties
+    properties = get_properties(data_dir)
+    cprint(f"📊 Dataset info: {properties.sid}, Task: {properties.task_type.value}")
+    
+    # Load test data (we'll use all available splits for inference)
+    test_splits = []
+    for split in [DataSplit.TRAIN, DataSplit.DEV, DataSplit.TEST]:
+        try:
+            data_loader = get_dataloader(data_dir=data_dir, split=split, batch_size=32)
+            if len(data_loader.dataset) > 0:
+                test_splits.append((split, data_loader))
+                cprint(f"   {split.value}: {len(data_loader.dataset)} samples")
+        except:
+            # Skip if split doesn't exist
+            pass
+    
+    if not test_splits:
+        raise ValueError("No data found for inference")
+    
+    # Run inference on all available data
+    model.eval()
+    all_predictions = []
+    all_labels = []
+    
+    with torch.no_grad():
+        for split_name, data_loader in test_splits:
+            cprint(f"🔮 Running inference on {split_name.value} split...")
+            
+            cache = PredictionsCache()
+            for x_txt, x_num, y, batch_properties in data_loader:
+                # Run model inference
+                y_pred = model(x_txt=x_txt, x_num=x_num, sid=batch_properties.sid, 
+                              d_output=batch_properties.d_effective_output)
+                
+                # Apply the same post-processing as during training
+                predictions = apply_loss_fn(y_pred, batch_properties.task_type)
+                cache.append(y=y, predictions=predictions)
+            
+            all_predictions.append(cache.y_pred)
+            all_labels.append(cache.y_true)
+    
+    # Concatenate all results
+    y_pred = np.concatenate(all_predictions)
+    y_true = np.concatenate(all_labels)
+    
+    # Calculate metrics
+    results = {}
+    
+    if properties.task_type == SupervisedTask.BINARY:
+        # For binary classification, calculate ROC AUC and KS
+        roc_auc = roc_auc_score(y_true, y_pred)
+        ks_statistic = calculate_ks_metric(y_true, y_pred)
+        
+        results['roc_auc'] = roc_auc
+        results['ks_statistic'] = ks_statistic
+        results['task_type'] = 'binary'
+        
+        cprint(f"📊 Binary Classification Results:")
+        cprint(f"   ROC AUC: {roc_auc:.4f}")
+        cprint(f"   KS Statistic: {ks_statistic:.4f}")
+        
+    elif properties.task_type == SupervisedTask.MULTICLASS:
+        # For multiclass, calculate macro-averaged ROC AUC
+        try:
+            roc_auc = roc_auc_score(y_true, y_pred, multi_class='ovr', average='macro')
+            results['roc_auc'] = roc_auc
+            results['task_type'] = 'multiclass'
+            cprint(f"📊 Multiclass Classification Results:")
+            cprint(f"   ROC AUC (macro): {roc_auc:.4f}")
+        except Exception as e:
+            cprint(f"⚠️ Could not calculate ROC AUC for multiclass: {e}")
+            results['roc_auc'] = None
+            results['task_type'] = 'multiclass'
+    
+    elif properties.task_type == SupervisedTask.REGRESSION:
+        # For regression, calculate R²
+        r2 = r2_score(y_true, y_pred)
+        results['r2_score'] = r2
+        results['task_type'] = 'regression'
+        
+        cprint(f"📊 Regression Results:")
+        cprint(f"   R² Score: {r2:.4f}")
+    
+    # Add basic statistics
+    results['n_samples'] = len(y_true)
+    results['predictions_mean'] = float(np.mean(y_pred))
+    results['predictions_std'] = float(np.std(y_pred))
+    results['labels_mean'] = float(np.mean(y_true))
+    results['labels_std'] = float(np.std(y_true))
+    
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run inference with a finetuned TabSTAR model")
+    parser.add_argument('--pretrain_exp', type=str, required=True,
+                       help='Name of the pretrained model experiment')
+    parser.add_argument('--exp_name', type=str, default='custom_dataset_finetune',
+                       help='Name of the finetuning experiment')
+    parser.add_argument('--test_csv_path', type=str, required=True,
+                       help='Path to the test CSV file')
+    parser.add_argument('--target_column', type=str, required=True,
+                       help='Name of the target column in the test CSV')
+    parser.add_argument('--run_num', type=int, default=0,
+                       help='Run number used during finetuning')
+    parser.add_argument('--custom_max_features', type=int, default=3000,
+                       help='Maximum number of features (should match finetuning)')
+    
+    # LoRA parameters (should match the finetuning run)
+    parser.add_argument('--lora_lr', type=float, default=0.001,
+                       help='LoRA learning rate used during finetuning')
+    parser.add_argument('--lora_batch', type=int, default=None,
+                       help='LoRA batch size used during finetuning')
+    parser.add_argument('--lora_r', type=int, default=None,
+                       help='LoRA rank used during finetuning')
+    parser.add_argument('--patience', type=int, default=50,
+                       help='Patience used during finetuning')
 
     args = parser.parse_args()
-
-    if not os.path.exists(args.inference_custom_csv_path):
-        raise FileNotFoundError(f"Inference CSV file not found: {args.inference_custom_csv_path}")
-    if not args.inference_custom_csv_path.endswith('.csv'):
-        raise ValueError("Inference dataset file must be a CSV file.")
-
-    cprint(f"Using device: {get_device()}", "yellow")
+    
+    # Set default values for LoRA parameters if not provided
+    if args.lora_batch is None:
+        from tabular.tabstar.params.constants import LORA_BATCH
+        args.lora_batch = LORA_BATCH
+    if args.lora_r is None:
+        from tabular.tabstar.params.constants import LORA_R
+        args.lora_r = LORA_R
+    
+    # Validate inputs
+    if not os.path.exists(args.test_csv_path):
+        raise FileNotFoundError(f"Test CSV file not found: {args.test_csv_path}")
+    
+    # Set device
     device = torch.device(get_device())
-
-    cprint(f"Loading PretrainArgs from: {args.pretrain_exp}", "cyan")
-    pretrain_args = PretrainArgs.from_json(pretrain_exp=args.pretrain_exp)
-
-    finetune_config_ns = argparse.Namespace(
-        pretrain_exp=args.pretrain_exp,
-        dataset_id=args.original_finetune_custom_csv_path, 
-        exp=args.finetune_exp,
-        run_num=args.run_num,
-        downstream_examples=args.downstream_examples,
-        downstream_keep_model=args.downstream_keep_model,
-        downstream_patience=args.downstream_patience,
-        lora_lr=args.lora_lr,
-        lora_batch=args.lora_batch,
-        lora_r=args.lora_r,
-        custom_csv_path=args.original_finetune_custom_csv_path,
-        custom_target_column="dummy_original_target", # Not strictly needed if preprocessor loads OK
-        custom_max_features=args.custom_max_features 
-    )
-    cprint(f"Creating FinetuneArgs for experiment: {args.finetune_exp}", "cyan")
-    finetune_args = FinetuneArgs.from_args(args=finetune_config_ns, pretrain_args=pretrain_args, exp_name=args.finetune_exp)
-
-    cprint(f"Loading preprocessor for original fine-tuning dataset: {args.original_finetune_custom_csv_path}", "cyan")
-    original_dataset_id_obj = TabularDatasetID(name=args.original_finetune_custom_csv_path, is_custom=True)
+    cprint(f"Using device: {device}")
     
-    original_data_dir = get_data_dir(
-        sid=original_dataset_id_obj.path_safe_name,
-        args=finetune_args, 
-        process_method_name=PreprocessingMethod.TABSTAR.value,
-        custom_path=args.original_finetune_custom_csv_path
-    )
+    # Fix seed for reproducibility
+    fix_seed()
     
-    preprocessor_path = os.path.join(original_data_dir, "preprocessor.pkl")
-    dataset_params_path = os.path.join(original_data_dir, "params.json")
-
-    if not os.path.exists(preprocessor_path) or not os.path.exists(dataset_params_path):
-        raise FileNotFoundError(f"Preprocessor or params.json not found in {original_data_dir}. "
-                                "Ensure --original_finetune_custom_csv_path is correct and was processed during fine-tuning.")
-
-    original_dataset_properties = DatasetProperties.from_json(dataset_params_path)
-    preprocessor = Preprocessor.load(
-        preprocessor_path, 
-        properties=original_dataset_properties, 
-        args=finetune_args, 
-        data_dir=original_data_dir
-    )
-    cprint(f"Preprocessor loaded. Original task type: {original_dataset_properties.task_type.value}", "green")
-
-    dummy_inference_ds_id = TabularDatasetID(name=args.inference_custom_csv_path, is_custom=True)
-    trainer = TabStarTrainer(
-        run_name=finetune_args.full_exp_name,
-        dataset_ids=[dummy_inference_ds_id], 
-        device=device,
-        run_num=finetune_args.run_num,
-        args=finetune_args,
-        custom_csv_path=args.inference_custom_csv_path, 
-        custom_target_column=args.inference_target_column,
-        custom_max_features=args.custom_max_features
-    )
-
-    cprint(f"Loading fine-tuned model from directory: {trainer.model_path}", "cyan")
-    trainer.load_model(cp_path=trainer.model_path)
-    trainer.model.eval()
-    cprint("Model loaded successfully.", "green")
-
-    cprint(f"Loading inference data from: {args.inference_custom_csv_path}", "cyan")
-    df_inference = pd.read_csv(args.inference_custom_csv_path)
+    cprint(f"🚀 Starting inference with finetuned TabSTAR model...")
+    cprint(f"   Pretrain experiment: {args.pretrain_exp}")
+    cprint(f"   Finetune experiment: {args.exp_name}")
+    cprint(f"   Test CSV: {args.test_csv_path}")
+    cprint(f"   Target column: {args.target_column}")
     
-    if args.inference_target_column not in df_inference.columns:
-        raise ValueError(f"Target column '{args.inference_target_column}' not found in inference CSV: {args.inference_custom_csv_path}")
-    
-    X_infer = df_inference.drop(columns=[args.inference_target_column])
-    y_infer_true_raw = df_inference[args.inference_target_column]
+    try:
+        # Load the finetuned model
+        model = load_finetuned_model(
+            pretrain_exp=args.pretrain_exp,
+            exp_name=args.exp_name,
+            lora_lr=args.lora_lr,
+            lora_batch=args.lora_batch,
+            lora_r=args.lora_r,
+            patience=args.patience,
+            device=device
+        )
+        
+        # Load pretrain args for preprocessing
+        pretrain_args = PretrainArgs.from_json(pretrain_exp=args.pretrain_exp)
+        
+        # Process the test CSV
+        cprint("📝 Processing test CSV...")
+        data_dir = process_test_csv(
+            csv_path=args.test_csv_path,
+            target_column=args.target_column,
+            pretrain_args=pretrain_args,
+            run_num=args.run_num,
+            device=device,
+            custom_max_features=args.custom_max_features
+        )
+        
+        # Run inference and calculate metrics
+        cprint("🔮 Running inference...")
+        results = run_inference(model, data_dir, device)
+        
+        # Print summary
+        cprint("🎉 Inference completed successfully!")
+        cprint("=" * 50)
+        
+        if results['task_type'] == 'binary':
+            cprint(f"📈 FINAL RESULTS:")
+            cprint(f"   ROC AUC: {results['roc_auc']:.4f}")
+            cprint(f"   KS Statistic: {results['ks_statistic']:.4f}")
+        elif results['task_type'] == 'multiclass':
+            if results['roc_auc'] is not None:
+                cprint(f"📈 FINAL RESULTS:")
+                cprint(f"   ROC AUC (macro): {results['roc_auc']:.4f}")
+        elif results['task_type'] == 'regression':
+            cprint(f"📈 FINAL RESULTS:")
+            cprint(f"   R² Score: {results['r2_score']:.4f}")
+        
+        cprint(f"   Samples: {results['n_samples']}")
+        cprint("=" * 50)
+        
+    except Exception as e:
+        cprint(f"❌ Error during inference: {e}")
+        raise
 
-    cprint("Preprocessing inference data...", "cyan")
-    processed_dict = preprocessor.transform(df=X_infer, y=y_infer_true_raw, split_type=DataSplit.TEST)
-    
-    x_txt_infer = processed_dict['x_cat_values'] 
-    x_num_infer = processed_dict['x_num_values'] 
-    y_infer_true_processed = processed_dict['y_values']
-
-    if not isinstance(x_txt_infer, np.ndarray): x_txt_infer = np.array(x_txt_infer, dtype=object)
-    if not isinstance(x_num_infer, np.ndarray): x_num_infer = np.array(x_num_infer, dtype=float)
-    if not isinstance(y_infer_true_processed, np.ndarray): y_infer_true_processed = np.array(y_infer_true_processed)
-    
-    cprint("Inference data preprocessed.", "green")
-
-    cprint("Performing inference...", "cyan")
-    with torch.no_grad():
-        inference_output = trainer.infer(x_txt_infer, x_num_infer, original_dataset_properties)
-        y_pred_raw_model = inference_output.y_pred
-        y_pred_final = apply_loss_fn(y_pred_raw_model, original_dataset_properties.task_type)
-    
-    y_pred_final_np = y_pred_final.cpu().numpy()
-    cprint("Inference complete.", "green")
-
-    if y_infer_true_processed.ndim > 1 and y_infer_true_processed.shape[1] == 1:
-        y_infer_true_processed = y_infer_true_processed.ravel()
-
-    if original_dataset_properties.task_type == SupervisedTask.BINARY:
-        if y_pred_final_np.ndim > 1 and y_pred_final_np.shape[1] == 1:
-             y_pred_final_np = y_pred_final_np.ravel()
-
-        roc_auc = roc_auc_score(y_infer_true_processed, y_pred_final_np)
-        ks_stat = calculate_ks_metric(y_true=y_infer_true_processed, y_pred_proba=y_pred_final_np)
-        cprint(f"\\n--- Inference Metrics (Binary Classification) ---", "blue")
-        cprint(f"ROC AUC: {roc_auc:.4f}", "green")
-        cprint(f"KS Statistic: {ks_stat:.4f}", "green")
-    elif original_dataset_properties.task_type == SupervisedTask.REGRESSION:
-        if y_pred_final_np.ndim > 1 and y_pred_final_np.shape[1] == 1:
-            y_pred_final_np = y_pred_final_np.ravel()
-        mse = mean_squared_error(y_infer_true_processed, y_pred_final_np)
-        cprint(f"\\n--- Inference Metrics (Regression) ---", "blue")
-        cprint(f"Mean Squared Error: {mse:.4f}", "green")
-    else: # Multiclass
-        cprint(f"\\n--- Inference Metrics (Multiclass) ---", "blue")
-        # Example: sklearn's roc_auc_score can handle multiclass with probabilities
-        try:
-            roc_auc_multi = roc_auc_score(y_infer_true_processed, y_pred_final_np, multi_class='ovr')
-            cprint(f"ROC AUC (OvR): {roc_auc_multi:.4f}", "green")
-        except ValueError as e:
-            cprint(f"Could not compute multiclass ROC AUC: {e}", "yellow")
-        cprint(f"Note: KS statistic is typically for binary classification.", "yellow")
 
 if __name__ == "__main__":
-    run_inference() 
+    main() 
