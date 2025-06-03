@@ -19,7 +19,7 @@ def get_model_path(run_name: str, is_pretrain: bool) -> str:
         main_dir = pretrain_exp_dir(run_name)
     else:
         main_dir = downstream_run_dir(run_name, is_tabstar=True)
-    return join(main_dir, "best.pt")
+    return main_dir
 
 
 def pretrain_args_path(exp_name: str) -> str:

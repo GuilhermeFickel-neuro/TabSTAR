@@ -6,7 +6,7 @@ import os
 import numpy as np
 import torch
 import wandb
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, PeftModel
 from torch.amp import autocast, GradScaler
 from torch.nn import Module
 from torch.optim import Optimizer
@@ -80,10 +80,8 @@ class TabStarTrainer(TabularModel):
         else:
             # For finetuning, load a pre-trained model from the checkpoint and wrap with Lora.
             assert isinstance(self.args, FinetuneArgs)
-            pretrain_file_path = get_model_path(self.args.pretrain_args.full_exp_name, is_pretrain=True)
-            pretrain_dir_path = os.path.dirname(pretrain_file_path)
-            self.model = TabStarModel.from_pretrained(pretrain_dir_path)
-            self.model.config = self.config
+            pretrain_model_dir = get_model_path(self.args.pretrain_args.full_exp_name, is_pretrain=True)
+            self.model = TabStarModel.from_pretrained(pretrain_model_dir)
             self.wrap_with_lora()
         self.model = self.model.to(self.device)
         assert isinstance(self.model, Module)
@@ -222,13 +220,32 @@ class TabStarTrainer(TabularModel):
         return inference.to_loss
 
     def load_model(self, cp_path: str):
-        # TODO: it doesn't seem like the Lora is being loaded here. Fix for "production" release, no need for research
-        # We probably would like to separate between the Pretrain and the Finetune code into different classes
+        # This method is called during test() for a finetuned model.
+        # cp_path is self.model_path, which is the directory where LoRA adapter was saved.
+        assert not self.is_pretrain, "load_model in this context is for finetuned models"
+        assert isinstance(self.args, FinetuneArgs), "FinetuneArgs expected for loading finetuned model"
+
+        # 1. Determine the path to the original base model
+        base_model_dir = get_model_path(self.args.pretrain_args.full_exp_name, is_pretrain=True)
+        
+        if not exists(base_model_dir):
+            raise FileNotFoundError(f"Base model directory {base_model_dir} for pretraining experiment '{self.args.pretrain_args.full_exp_name}' does not exist.")
+        
+        # 2. Load the base model
+        cprint(f"🔄 Loading base model from {base_model_dir}...")
+        base_model = TabStarModel.from_pretrained(base_model_dir)
+        
+        # cp_path is the directory where the LoRA adapter was saved by self.model.save_pretrained(cp_path)
+        # self.model at the time of saving was a PeftModel.
         if not exists(cp_path):
-            raise FileNotFoundError(f"Checkpoint file {cp_path} does not exist.")
-        model_dir_path = os.path.dirname(cp_path)
-        self.model = TabStarModel.from_pretrained(model_dir_path)
+            raise FileNotFoundError(f"LoRA adapter directory {cp_path} does not exist.")
+            
+        # 3. Load the LoRA adapter onto the base model.
+        # PeftModel is already imported in this file (used in wrap_with_lora).
+        cprint(f"🔄 Loading LoRA adapter from {cp_path}...")
+        self.model = PeftModel.from_pretrained(base_model, cp_path)
         self.model.to(self.device)
+        cprint(f"✅ Successfully loaded finetuned model: base from {base_model_dir}, LoRA adapter from {cp_path}")
 
     def test(self) -> Dict[DataSplit, Predictions]:
         assert not self.is_pretrain
