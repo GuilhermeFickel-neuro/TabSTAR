@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
@@ -8,3 +9,4 @@ class Predictions:
     score: float
     predictions: np.ndarray
     labels: np.ndarray
+    ks_score: Optional[float] = None

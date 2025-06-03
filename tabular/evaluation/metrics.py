@@ -6,6 +6,7 @@ from pandas import Series
 from sklearn.metrics import roc_auc_score, r2_score
 from tabpfn_extensions.scoring.scoring_utils import safe_roc_auc_score
 from torch import Tensor
+from scipy.stats import ks_2samp
 
 from tabular.preprocessing.objects import SupervisedTask
 
@@ -44,6 +45,57 @@ def calculate_metric(task_type: SupervisedTask, y_true: Series | np.ndarray, y_p
     else:
         raise ValueError(f"Unsupported data properties: {task_type}")
     return float(score)
+
+
+def calculate_ks_metric(y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
+    """Calculates the Kolmogorov-Smirnov statistic for binary classification.
+
+    Args:
+        y_true: True binary labels (0 or 1).
+        y_pred_proba: Predicted probabilities for the positive class.
+
+    Returns:
+        The KS statistic.
+    """
+    if not isinstance(y_true, np.ndarray):
+        y_true = np.array(y_true)
+    if not isinstance(y_pred_proba, np.ndarray):
+        y_pred_proba = np.array(y_pred_proba)
+
+    if y_true.ndim > 1 and y_true.shape[1] == 1:
+        y_true = y_true.ravel()
+    if y_pred_proba.ndim > 1 and y_pred_proba.shape[1] == 1:
+        y_pred_proba = y_pred_proba.ravel()
+        
+    if not (np.all(np.isin(y_true, [0, 1]))):
+        raise ValueError("y_true must contain only binary labels (0 or 1).")
+    if not (y_true.shape == y_pred_proba.shape):
+        # This can happen if y_pred_proba is (n_samples, 2) for binary case from some models.
+        # Assuming y_pred_proba[:, 1] is the prob for positive class as per roc_auc_score convention.
+        if y_pred_proba.ndim == 2 and y_pred_proba.shape[1] == 2:
+            y_pred_proba = y_pred_proba[:, 1]
+        else:
+            raise ValueError(f"y_true ({y_true.shape}) and y_pred_proba ({y_pred_proba.shape}) must have the same shape or y_pred_proba be (n_samples, 2).")
+    if not (y_true.shape == y_pred_proba.shape): # re-check after potential reshape
+         raise ValueError(f"Shape mismatch after attempting to reconcile: y_true ({y_true.shape}) and y_pred_proba ({y_pred_proba.shape}).")
+
+
+    unique_labels = np.unique(y_true)
+    if len(unique_labels) < 2:
+        # KS statistic is not well-defined if only one class is present
+        verbose_print(f"⚠️ KS metric is not well-defined for single-class data. Unique labels: {unique_labels}. Returning 0.0")
+        return 0.0
+
+    class0_probs = y_pred_proba[y_true == 0]
+    class1_probs = y_pred_proba[y_true == 1]
+
+    if len(class0_probs) == 0 or len(class1_probs) == 0:
+        # KS statistic is not well-defined if one class has no samples
+        verbose_print(f"⚠️ KS metric is not well-defined if one class has no samples. Class0 count: {len(class0_probs)}, Class1 count: {len(class1_probs)}. Returning 0.0")
+        return 0.0
+        
+    ks_statistic, _ = ks_2samp(class0_probs, class1_probs)
+    return float(ks_statistic)
 
 
 def per_class_auc(y_true, y_pred) -> float:

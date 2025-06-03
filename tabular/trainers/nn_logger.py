@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 
 import wandb
 from torch.optim.lr_scheduler import LRScheduler
@@ -26,7 +26,10 @@ def log_dev_loss(is_pretrain: bool, dev_loss: LossAccumulator, metric: float, ep
 def log_dev_performance(properties: DatasetProperties, is_pretrain: bool, epoch: int,
                         data_dev_loss: LossAccumulator, predictions: Predictions):
     cat = f"{prefix(is_pretrain)}/{properties.sid}"
-    wandb.log({f'{cat}/val_loss': data_dev_loss.avg, f'{cat}/val_metric': predictions.score}, step=epoch)
+    log_dict = {f'{cat}/val_loss': data_dev_loss.avg, f'{cat}/val_metric': predictions.score}
+    if predictions.ks_score is not None:
+        log_dict[f'{cat}/val_ks_metric'] = predictions.ks_score
+    wandb.log(log_dict, step=epoch)
 
 
 def log_train_loss(train_loss: LossAccumulator, epoch: int, is_pretrain: bool, dataset2losses: Dict[str, LossAccumulator]):
@@ -36,8 +39,10 @@ def log_train_loss(train_loss: LossAccumulator, epoch: int, is_pretrain: bool, d
         wandb.log({f'{cat}/{sid}/train_loss': data_train_loss.avg}, step=epoch)
 
 def summarize_epoch(epoch: int, train_loss: LossAccumulator, dev_loss: LossAccumulator, metric_score: float,
-                    early_stopper: EarlyStopping, is_pretrain: bool):
+                    early_stopper: EarlyStopping, is_pretrain: bool, avg_ks_score: Optional[float] = None):
     log_str = f"Epoch {epoch} || Train {train_loss.avg} || Val {dev_loss.avg} || Metric {metric_score:.4f}"
+    if avg_ks_score is not None:
+        log_str += f" || KS {avg_ks_score:.4f}"
     if metric_score > early_stopper.metric:
         log_str += " 🥇"
     elif is_pretrain:

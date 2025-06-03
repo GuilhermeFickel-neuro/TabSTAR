@@ -18,10 +18,10 @@ from tabular.datasets.tabular_datasets import TabularDatasetID
 from tabular.datasets.properties import DatasetProperties
 from tabular.datasets.torch_dataset import HDF5Dataset
 from tabular.evaluation.loss import apply_loss_fn, get_loss_fn, LossAccumulator, get_torch_dtype
-from tabular.evaluation.metrics import PredictionsCache, calculate_metric
+from tabular.evaluation.metrics import PredictionsCache, calculate_metric, calculate_ks_metric
 from tabular.evaluation.predictions import Predictions
 from tabular.models.abstract_model import TabularModel
-from tabular.preprocessing.objects import PreprocessingMethod
+from tabular.preprocessing.objects import PreprocessingMethod, SupervisedTask
 from tabular.preprocessing.splits import DataSplit
 from tabular.tabstar.arch.arch import TabStarModel
 from tabular.tabstar.params.config import TabStarConfig
@@ -141,6 +141,7 @@ class TabStarTrainer(TabularModel):
                                dataset2losses=dataset2losses)
                 dev_loss = LossAccumulator()
                 dev_metrics = []
+                dev_ks_metrics = []
                 with tqdm(total=len(self.data_dirs), desc="Eval", leave=False) as pbar_eval:
                     for data_loader in self.data_loaders[DataSplit.DEV]:
                         assert isinstance(data_loader, DataLoader) and isinstance(data_loader.dataset, HDF5Dataset)
@@ -148,13 +149,18 @@ class TabStarTrainer(TabularModel):
                         data_dev_loss, predictions = self.eval_dataset(data_loader=data_loader)
                         dev_loss += data_dev_loss
                         dev_metrics.append(predictions.score)
+                        if predictions.ks_score is not None:
+                            dev_ks_metrics.append(predictions.ks_score)
                         log_dev_performance(properties=properties, is_pretrain=self.is_pretrain, epoch=epoch,
                                             data_dev_loss=data_dev_loss, predictions=predictions)
                         pbar_eval.update(1)
                 metric_score = float(np.mean(dev_metrics))
+                avg_ks_score: Optional[float] = None
+                if dev_ks_metrics:
+                    avg_ks_score = float(np.mean(dev_ks_metrics))
                 log_dev_loss(is_pretrain=self.is_pretrain, dev_loss=dev_loss, metric=metric_score, epoch=epoch)
                 summarize_epoch(epoch=epoch, train_loss=train_loss, dev_loss=dev_loss, metric_score=metric_score,
-                                early_stopper=early_stopper, is_pretrain=self.is_pretrain)
+                                early_stopper=early_stopper, is_pretrain=self.is_pretrain, avg_ks_score=avg_ks_score)
                 early_stopper.update(metric_score)
                 if early_stopper.is_best:
                     self.model.save_pretrained(self.model_path)
@@ -208,7 +214,14 @@ class TabStarTrainer(TabularModel):
             batch_loss = self.eval_one_batch(x_txt=x_txt, x_num=x_num, y=y, properties=properties, cache=cache)
             dev_dataset_loss.update_batch(batch_loss=batch_loss, batch=x_txt)
         metric_score = calculate_metric(task_type=properties.task_type, y_true=cache.y_true, y_pred=cache.y_pred)
-        predictions = Predictions(score=float(metric_score), predictions=cache.y_pred, labels=cache.y_true)
+        
+        ks_score_val: Optional[float] = None
+        if properties.task_type == SupervisedTask.BINARY:
+            # y_pred from cache is already probability for positive class for binary tasks
+            # (due to apply_loss_fn logic)
+            ks_score_val = calculate_ks_metric(y_true=cache.y_true, y_pred_proba=cache.y_pred)
+            
+        predictions = Predictions(score=float(metric_score), predictions=cache.y_pred, labels=cache.y_true, ks_score=ks_score_val)
         return dev_dataset_loss, predictions
 
     def eval_one_batch(self, x_txt: np.ndarray, x_num: np.ndarray, y: np.ndarray, properties: DatasetProperties, cache: PredictionsCache) -> Loss:
