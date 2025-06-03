@@ -1,14 +1,18 @@
 import argparse
 import os
 from typing import Optional, Dict
+from os.path import join
 
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.metrics import roc_auc_score, r2_score
+from torch.utils.data import DataLoader
 
 from tabular.datasets.tabular_datasets import TabularDatasetID, CustomDatasetID, get_sid
-from tabular.datasets.torch_dataset import get_data_dir, get_properties, HDF5Dataset
+from tabular.datasets.torch_dataset import get_data_dir, get_properties, HDF5Dataset, create_dataset, get_raw_dataset, fill_idx2text, save_data_splits, save_properties
+from tabular.datasets.data_processing import TabularDataset
+from tabular.datasets.properties import DatasetProperties
 from tabular.evaluation.loss import apply_loss_fn
 from tabular.evaluation.metrics import calculate_metric, calculate_ks_metric, PredictionsCache
 from tabular.preprocessing.objects import SupervisedTask
@@ -18,9 +22,9 @@ from tabular.tabstar.params.config import TabStarConfig
 from tabular.tabstar.tabstar_trainer import TabStarTrainer
 from tabular.trainers.finetune_args import FinetuneArgs
 from tabular.trainers.pretrain_args import PretrainArgs
-from tabular.utils.dataloaders import get_dataloader
+from tabular.utils.dataloaders import get_dataloader, tabular_collate_fn
 from tabular.utils.gpus import get_device
-from tabular.utils.paths import get_model_path, sanitize_filename_component
+from tabular.utils.paths import get_model_path, sanitize_filename_component, create_dir, dataset_run_properties_dir, properties_path
 from tabular.utils.utils import cprint, verbose_print, fix_seed
 from tabular.utils.logging import LOG_SEP
 from peft import PeftModel
@@ -83,27 +87,90 @@ def load_finetuned_model(pretrain_exp: str, exp_name: str, lora_lr: float,
     return model
 
 
-def process_test_csv(csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
-                    run_num: int, device: torch.device, custom_max_features: int = 3000) -> str:
-    """Process the test CSV using the same preprocessing pipeline as training"""
+def create_inference_dataset(data_dir: str, csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
+                           run_num: int, device: torch.device, custom_max_features: int = 3000):
+    """Create a dataset for inference where ALL data goes into the TRAIN split"""
+    
+    # Load raw dataset
+    dataset_id = CustomDatasetID.CUSTOM_CSV
+    raw_dataset = get_raw_dataset(dataset_id, custom_csv_path=csv_path, 
+                                 custom_target_column=target_column, custom_max_features=custom_max_features)
+    
+    # Create artificial splits where ALL data goes to TRAIN
+    n = len(raw_dataset.y)
+    splits = [DataSplit.TRAIN] * n  # All data goes to train split
+    
+    # Process dataset for TabSTAR
+    from tabular.preprocessing.target import process_y
+    from tabular.tabstar.preprocessing.numerical import scale_x_num_and_add_categorical_bins
+    from tabular.tabstar.preprocessing.textual import verbalize_x_txt
+    from tabular.tabstar.preprocessing.target import add_target_tokens
+    
+    # Process targets
+    targets = process_y(raw=raw_dataset, splits=splits, processing=TabStarTrainer.PROCESSING)
+    feat_cnt = {feat_type.value: len(names) for feat_type, names in raw_dataset.feature_types.items()}
+    
+    # Process for TabSTAR
+    x_txt, x_num = scale_x_num_and_add_categorical_bins(raw=raw_dataset, splits=splits,
+                                                       number_verbalization=pretrain_args.numbers_verbalization)
+    verbalize_x_txt(x_txt)
+    
+    # Create properties with all data in train split
+    properties = DatasetProperties.create(raw=raw_dataset, splits=splits, feat_cnt=feat_cnt, 
+                                         targets=targets, processing=TabStarTrainer.PROCESSING)
+    
+    # Add target tokens
+    x_txt, x_num = add_target_tokens(x_txt=x_txt, x_num=x_num, data=properties)
+    
+    # Create dataset
+    dataset = TabularDataset(properties=properties, x=x_txt, y=raw_dataset.y, splits=splits, x_num=x_num)
+    
+    # Fill text mappings
+    fill_idx2text(dataset)
+    
+    # Save dataset
+    cprint(f"Saving inference dataset {dataset.properties.sid} to {data_dir}")
+    save_data_splits(dataset=dataset, data_dir=data_dir, processing=TabStarTrainer.PROCESSING)
+    save_properties(data_dir=data_dir, dataset=dataset)
+    cprint(f"✅ Saved inference dataset!")
+
+
+def process_test_csv_for_inference(csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
+                                  run_num: int, device: torch.device, custom_max_features: int = 3000) -> str:
+    """Process the test CSV specifically for inference, putting all data into train split"""
     
     # Create a custom dataset ID for the test data
     test_dataset_id = CustomDatasetID.CUSTOM_CSV
     
-    # Get the data directory (this will create and cache the processed dataset)
-    data_dir = get_data_dir(
-        dataset=test_dataset_id,
-        processing=TabStarTrainer.PROCESSING,
-        run_num=run_num,
-        train_examples=-1,  # Use all available data
-        device=device,
-        number_verbalization=pretrain_args.numbers_verbalization,
-        custom_csv_path=csv_path,
-        custom_target_column=target_column,
-        custom_max_features=custom_max_features
-    )
+    # For inference, we'll use a different run_num to avoid conflicts with training data
+    inference_run_num = run_num + 1000  # Offset to avoid conflicts
+    
+    # Create data directory manually
+    sid = get_sid(test_dataset_id)
+    data_dir = os.path.join(dataset_run_properties_dir(run_num=inference_run_num, train_examples=-1), 
+                           TabStarTrainer.PROCESSING, sid)
+    if pretrain_args.numbers_verbalization.value != "full":
+        data_dir = os.path.join(data_dir, pretrain_args.numbers_verbalization.value)
+    
+    # Check if already exists
+    if not os.path.exists(properties_path(data_dir)):
+        create_dir(data_dir)
+        try:
+            create_inference_dataset(data_dir=data_dir, csv_path=csv_path, target_column=target_column,
+                                   pretrain_args=pretrain_args, run_num=inference_run_num, device=device,
+                                   custom_max_features=custom_max_features)
+        except Exception as e:
+            raise Exception(f"🚨🚨🚨 Error creating inference dataset due to: {e}")
     
     return data_dir
+
+
+def process_test_csv(csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
+                    run_num: int, device: torch.device, custom_max_features: int = 3000) -> str:
+    """Process the test CSV using the same preprocessing pipeline as training"""
+    
+    # Use the new inference-specific function
+    return process_test_csv_for_inference(csv_path, target_column, pretrain_args, run_num, device, custom_max_features)
 
 
 def run_inference(model: TabStarModel, data_dir: str, device: torch.device) -> Dict:
@@ -112,47 +179,40 @@ def run_inference(model: TabStarModel, data_dir: str, device: torch.device) -> D
     # Get dataset properties
     properties = get_properties(data_dir)
     cprint(f"📊 Dataset info: {properties.sid}, Task: {properties.task_type.value}")
+    cprint(f"📊 Available splits: {properties.split_sizes}")
     
-    # Load test data (we'll use all available splits for inference)
-    test_splits = []
-    for split in [DataSplit.TRAIN, DataSplit.DEV, DataSplit.TEST]:
-        try:
-            data_loader = get_dataloader(data_dir=data_dir, split=split, batch_size=32)
-            if len(data_loader.dataset) > 0:
-                test_splits.append((split, data_loader))
-                cprint(f"   {split.value}: {len(data_loader.dataset)} samples")
-        except:
-            # Skip if split doesn't exist
-            pass
+    # For inference, all data should be in the TRAIN split
+    if 'train' not in properties.split_sizes or properties.split_sizes['train'] == 0:
+        raise ValueError("No training data found for inference. Expected all data to be in 'train' split.")
     
-    if not test_splits:
-        raise ValueError("No data found for inference")
+    total_samples = properties.split_sizes['train']
+    cprint(f"📊 Total samples for inference: {total_samples}")
     
-    # Run inference on all available data
+    # Load the train split which contains all our inference data
+    # We need to create a custom dataloader for the train split
+    dataset = HDF5Dataset(split_dir=join(data_dir, DataSplit.TRAIN))
+    data_loader = DataLoader(dataset, shuffle=False, collate_fn=tabular_collate_fn, batch_size=32, num_workers=0)
+    
+    cprint(f"🔮 Running inference on {len(data_loader.dataset)} samples...")
+    
+    # Run inference on all data
     model.eval()
-    all_predictions = []
-    all_labels = []
     
     with torch.no_grad():
-        for split_name, data_loader in test_splits:
-            cprint(f"🔮 Running inference on {split_name.value} split...")
+        cache = PredictionsCache()
+        for x_txt, x_num, y, batch_properties in data_loader:
+            # Run model inference
+            y_pred = model(x_txt=x_txt, x_num=x_num, sid=batch_properties.sid, 
+                          d_output=batch_properties.d_effective_output)
             
-            cache = PredictionsCache()
-            for x_txt, x_num, y, batch_properties in data_loader:
-                # Run model inference
-                y_pred = model(x_txt=x_txt, x_num=x_num, sid=batch_properties.sid, 
-                              d_output=batch_properties.d_effective_output)
-                
-                # Apply the same post-processing as during training
-                predictions = apply_loss_fn(y_pred, batch_properties.task_type)
-                cache.append(y=y, predictions=predictions)
-            
-            all_predictions.append(cache.y_pred)
-            all_labels.append(cache.y_true)
+            # Apply the same post-processing as during training
+            predictions = apply_loss_fn(y_pred, batch_properties.task_type)
+            cache.append(y=y, predictions=predictions)
     
-    # Concatenate all results
-    y_pred = np.concatenate(all_predictions)
-    y_true = np.concatenate(all_labels)
+    y_pred = cache.y_pred
+    y_true = cache.y_true
+    
+    cprint(f"📊 Final dataset: {len(y_pred)} total predictions")
     
     # Calculate metrics
     results = {}

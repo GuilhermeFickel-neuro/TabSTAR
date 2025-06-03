@@ -72,7 +72,7 @@ class HDF5Dataset(Dataset):
             self.h5_file = h5py.File(self.file_path, 'r')
 
     def __del__(self):
-        if self.h5_file is not None:
+        if hasattr(self, 'h5_file') and self.h5_file is not None:
             self.h5_file.close()
 
 
