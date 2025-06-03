@@ -262,6 +262,50 @@ def run_inference(model: TabStarModel, data_dir: str, device: torch.device) -> D
     return results
 
 
+def save_results_to_csv(dataset_name: str, finetuned_model: str, results: Dict, csv_path: str = "results.csv"):
+    """Save inference results to CSV file, appending to existing data if present"""
+    
+    # Extract relevant metrics
+    roc_auc = results.get('roc_auc', None)
+    ks_statistic = results.get('ks_statistic', None)
+    task_type = results.get('task_type', 'unknown')
+    n_samples = results.get('n_samples', 0)
+    
+    # Create new result row
+    new_result = {
+        'dataset_name': dataset_name,
+        'finetuned_model': finetuned_model,
+        'task_type': task_type,
+        'n_samples': n_samples,
+        'roc_auc': roc_auc,
+        'ks_statistic': ks_statistic,
+        'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    # Read existing results if file exists
+    if os.path.exists(csv_path):
+        try:
+            existing_df = pd.read_csv(csv_path)
+            cprint(f"📄 Found existing results file with {len(existing_df)} entries")
+        except Exception as e:
+            cprint(f"⚠️ Could not read existing results file: {e}")
+            existing_df = pd.DataFrame()
+    else:
+        cprint(f"📄 Creating new results file: {csv_path}")
+        existing_df = pd.DataFrame()
+    
+    # Append new result
+    new_df = pd.DataFrame([new_result])
+    combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+    
+    # Save to CSV
+    combined_df.to_csv(csv_path, index=False)
+    cprint(f"💾 Saved results to {csv_path}")
+    cprint(f"📊 Total entries in results file: {len(combined_df)}")
+    
+    return csv_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run inference with a finetuned TabSTAR model")
     parser.add_argument('--pretrain_exp', type=str, required=True,
@@ -278,6 +322,8 @@ def main():
                        help='Maximum number of features (should match finetuning)')
     parser.add_argument('--train_examples', type=int, default=10000,
                        help='Number of training examples used during finetuning')
+    parser.add_argument('--results_csv', type=str, default='results.csv',
+                       help='Path to save results CSV file')
     
     # LoRA parameters (should match the finetuning run)
     parser.add_argument('--lora_lr', type=float, default=0.001,
@@ -310,11 +356,16 @@ def main():
     # Fix seed for reproducibility
     fix_seed()
     
+    # Create model identifier for results
+    dataset_name = os.path.basename(args.test_csv_path)
+    finetuned_model = f"{args.pretrain_exp}__{args.exp_name}__lr_{args.lora_lr}__r_{args.lora_r}__examples_{args.train_examples}"
+    
     cprint(f"🚀 Starting inference with finetuned TabSTAR model...")
     cprint(f"   Pretrain experiment: {args.pretrain_exp}")
     cprint(f"   Finetune experiment: {args.exp_name}")
     cprint(f"   Test CSV: {args.test_csv_path}")
     cprint(f"   Target column: {args.target_column}")
+    cprint(f"   Model identifier: {finetuned_model}")
     
     try:
         # Load the finetuned model
@@ -348,6 +399,11 @@ def main():
         cprint("🔮 Running inference...")
         results = run_inference(model, data_dir, device)
         
+        # Save results to CSV
+        cprint("💾 Saving results...")
+        save_results_to_csv(dataset_name=dataset_name, finetuned_model=finetuned_model, 
+                           results=results, csv_path=args.results_csv)
+        
         # Print summary
         cprint("🎉 Inference completed successfully!")
         cprint("=" * 50)
@@ -365,6 +421,7 @@ def main():
             cprint(f"   R² Score: {results['r2_score']:.4f}")
         
         cprint(f"   Samples: {results['n_samples']}")
+        cprint(f"   Results saved to: {args.results_csv}")
         cprint("=" * 50)
         
     except Exception as e:
