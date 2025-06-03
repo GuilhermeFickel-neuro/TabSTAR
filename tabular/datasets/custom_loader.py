@@ -51,14 +51,27 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
     x = df.drop(columns=[target_column])
     y = df[target_column]
     
+    # Infer task_type from y
+    from tabular.preprocessing.objects import SupervisedTask
+    unique_values = y.unique()
+    num_unique = len(unique_values)
+
+    if num_unique == 2:
+        inferred_task_type = SupervisedTask.BINARY
+    elif pd.api.types.is_numeric_dtype(y) and num_unique > 20: # Heuristic for regression
+        inferred_task_type = SupervisedTask.REGRESSION
+    elif num_unique <= 20 : # Heuristic for multiclass
+        inferred_task_type = SupervisedTask.MULTICLASS
+    else: # Default or fallback
+        inferred_task_type = SupervisedTask.REGRESSION
+
     # Create a basic curation object (you can customize this)
     from tabular.datasets.manual_curation_obj import CuratedDataset, CuratedTarget, CuratedFeature
-    from tabular.preprocessing.objects import SupervisedTask
     
     # Create target specification
     target = CuratedTarget(
         raw_name=target_column,
-        task_type=SupervisedTask.REGRESSION  # Will be auto-detected later
+        task_type=inferred_task_type # Use inferred task type
     )
     
     # Create basic feature specifications for all columns
