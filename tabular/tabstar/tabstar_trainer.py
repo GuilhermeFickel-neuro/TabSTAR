@@ -1,6 +1,7 @@
 import shutil
 from os.path import exists
 from typing import Optional, Dict, Tuple, List
+import os
 
 import numpy as np
 import torch
@@ -79,8 +80,9 @@ class TabStarTrainer(TabularModel):
         else:
             # For finetuning, load a pre-trained model from the checkpoint and wrap with Lora.
             assert isinstance(self.args, FinetuneArgs)
-            pretrain_path = get_model_path(self.args.pretrain_args.full_exp_name, is_pretrain=True)
-            self.model = TabStarModel.from_pretrained(pretrain_path)
+            pretrain_file_path = get_model_path(self.args.pretrain_args.full_exp_name, is_pretrain=True)
+            pretrain_dir_path = os.path.dirname(pretrain_file_path)
+            self.model = TabStarModel.from_pretrained(pretrain_dir_path)
             self.model.config = self.config
             self.wrap_with_lora()
         self.model = self.model.to(self.device)
@@ -224,7 +226,8 @@ class TabStarTrainer(TabularModel):
         # We probably would like to separate between the Pretrain and the Finetune code into different classes
         if not exists(cp_path):
             raise FileNotFoundError(f"Checkpoint file {cp_path} does not exist.")
-        self.model = TabStarModel.from_pretrained(cp_path)
+        model_dir_path = os.path.dirname(cp_path)
+        self.model = TabStarModel.from_pretrained(model_dir_path)
         self.model.to(self.device)
 
     def test(self) -> Dict[DataSplit, Predictions]:
