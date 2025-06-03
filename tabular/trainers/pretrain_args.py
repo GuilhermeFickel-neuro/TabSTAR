@@ -7,8 +7,8 @@ from tabular.datasets.tabular_datasets import OpenMLDatasetID
 from tabular.tabstar.params.constants import NumberVerbalization
 from tabular.utils.io_handlers import load_json, dump_json
 from tabular.utils.logging import LOG_SEP
-from tabular.utils.paths import pretrain_args_path, create_dir
-from tabular.utils.utils import get_current_commit_hash, get_today, verbose_print
+from tabular.utils.paths import pretrain_args_path, create_dir, sanitize_filename_component
+from tabular.utils.utils import get_current_commit_hash, get_today, verbose_print, str_float
 
 MAX_EPOCH_EXAMPLES = 2048
 if MAX_EPOCH_EXAMPLES % BATCH_SIZE != 0:
@@ -81,11 +81,11 @@ class PretrainArgs:
 
     def set_full_exp_name(self) -> str:
         strings = [get_today(),
-                   self.raw_exp_name,
+                   sanitize_filename_component(self.raw_exp_name),
                    f"data_{self.num_datasets}",
                    f"tab_{self.tabular_layers}",
                    f"layers_{self.unfreeze_layers}",
-                   f"num_verb_{self.numbers_verbalization}",
+                   f"num_verb_{sanitize_filename_component(self.numbers_verbalization.value)}",
                    f"lr_{str_float(self.base_lr)}",
                    f"wd_{str_float(self.weight_decay)}",
                    f"git_{get_current_commit_hash()}"]

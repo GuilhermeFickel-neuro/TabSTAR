@@ -1,5 +1,6 @@
 import os
 from os.path import join
+import re
 
 CACHE_DIR = ".tabular_cache"
 
@@ -48,3 +49,32 @@ def create_dir(path: str, is_file: bool = False):
     if is_file:
         path = os.path.dirname(path)
     os.makedirs(path, exist_ok=True)
+
+def sanitize_filename_component(name: str) -> str:
+    """Sanitizes a string to be a safe component in a filename or directory name."""
+    if not isinstance(name, str):
+        name = str(name)
+    
+    # Replace specific problematic characters (like *, 🌟) with underscores
+    name = name.replace('*', '_')
+    # Using a more generic name for emoji replacement, can be expanded
+    name = name.replace('🌟', '_star_') 
+    name = name.replace('✨', '_star_') # Explicit unicode for glowing star
+    name = name.replace('🌟', '_star_') # Another star emoji variant
+
+    # General sanitization for other common problematic characters in filenames
+    # Windows reserved: < > : " / \ | ? *
+    # We've handled * and emoji. '/' is handled by os.path.join.
+    # Let's replace <, >, ", |, ?, \ with underscore.
+    # ':' can be tricky; on Windows, it's a drive separator. For now, let's replace it too if it's not part of a drive letter.
+    # Simpler: replace known bad characters.
+    name = re.sub(r'[<>:"\|?]', '_', name)
+    
+    # Replace multiple consecutive underscores with a single underscore
+    name = re.sub(r'_+', '_', name)
+    # Remove leading/trailing underscores that might result from replacements
+    name = name.strip('_')
+    # Ensure name is not empty after sanitization
+    if not name:
+        name = "sanitized_name" # Default if everything gets stripped
+    return name

@@ -12,7 +12,7 @@ from tabular.trainers.finetune_args import FinetuneArgs
 from tabular.trainers.pretrain_args import PretrainArgs
 from tabular.utils.io_handlers import load_json, dump_json
 from tabular.utils.logging import LOG_SEP
-from tabular.utils.paths import create_dir, train_results_path
+from tabular.utils.paths import create_dir, train_results_path, sanitize_filename_component
 from tabular.utils.utils import fix_seed, SEED
 
 
@@ -82,8 +82,8 @@ class ModelTrainer:
     @property
     def run_name(self) -> str:
         strings = [self.exp_name,
-                   self.model_cls.SHORT_NAME,
-                   f"sid_{get_sid(self.dataset_id)}",
+                   sanitize_filename_component(self.model_cls.SHORT_NAME),
+                   f"sid_{sanitize_filename_component(get_sid(self.dataset_id))}",
                    f"run_{self.run_num}",
                    f"examples_{self.train_examples}"]
         return LOG_SEP.join(strings)

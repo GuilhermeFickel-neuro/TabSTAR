@@ -5,6 +5,7 @@ from typing import Optional, Self
 
 from tabular.trainers.pretrain_args import PretrainArgs
 from tabular.utils.logging import LOG_SEP
+from tabular.utils.paths import sanitize_filename_component
 
 
 # TODO: use HfArgumentParser
@@ -33,7 +34,7 @@ class FinetuneArgs:
                             patience=args.downstream_patience)
 
     def set_full_exp_name(self) -> str:
-        strings = [self.raw_exp_name,
+        strings = [sanitize_filename_component(self.raw_exp_name),
                    f"lora_lr_{self.lora_lr}",
                    f"lora_batch_{self.lora_batch}",
                    f"lora_r_{self.lora_r}",
