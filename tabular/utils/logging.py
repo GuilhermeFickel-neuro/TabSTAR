@@ -34,5 +34,5 @@ def wandb_run(exp_name: str, run_type: RunType) -> None:
         pretrain_exp, finetune_exp = exp_name.split('/')
         tags.append(hash_str(pretrain_exp))
     wandb.login(key=WANDB_API_KEY)
-    wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, reinit=True, name=exp_name, group=str(run_type.value),
+    wandb.init(project=WANDB_PROJECT, reinit=True, name=exp_name, group=str(run_type.value),
                tags=tags, mode=mode)
