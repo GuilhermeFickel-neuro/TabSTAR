@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 from sklearn.metrics import roc_auc_score, r2_score
 
-from tabular.datasets.tabular_datasets import TabularDatasetID, CustomDatasetID
+from tabular.datasets.tabular_datasets import TabularDatasetID, CustomDatasetID, get_sid
 from tabular.datasets.torch_dataset import get_data_dir, get_properties, HDF5Dataset
 from tabular.evaluation.loss import apply_loss_fn
 from tabular.evaluation.metrics import calculate_metric, calculate_ks_metric, PredictionsCache
@@ -20,13 +20,15 @@ from tabular.trainers.finetune_args import FinetuneArgs
 from tabular.trainers.pretrain_args import PretrainArgs
 from tabular.utils.dataloaders import get_dataloader
 from tabular.utils.gpus import get_device
-from tabular.utils.paths import get_model_path
+from tabular.utils.paths import get_model_path, sanitize_filename_component
 from tabular.utils.utils import cprint, verbose_print, fix_seed
+from tabular.utils.logging import LOG_SEP
 from peft import PeftModel
 
 
 def load_finetuned_model(pretrain_exp: str, exp_name: str, lora_lr: float, 
-                        lora_batch: int, lora_r: int, patience: int, device: torch.device) -> TabStarModel:
+                        lora_batch: int, lora_r: int, patience: int, device: torch.device, 
+                        run_num: int, train_examples: int) -> TabStarModel:
     """Load the finetuned TabSTAR model (base model + LoRA adapter)"""
     
     # Load pretrain args to get the base model path
@@ -50,7 +52,23 @@ def load_finetuned_model(pretrain_exp: str, exp_name: str, lora_lr: float,
     
     mock_args = MockArgs()
     finetune_args = FinetuneArgs.from_args(args=mock_args, exp_name=exp_name, pretrain_args=pretrain_args)
-    adapter_dir = get_model_path(finetune_args.full_exp_name, is_pretrain=False)
+    
+    # Now construct the full run_name following ModelTrainer.run_name pattern
+    dataset_id = CustomDatasetID.CUSTOM_CSV
+    model_short_name = "Tab*"  # TabStarTrainer.SHORT_NAME
+    
+    run_name_components = [
+        exp_name,
+        sanitize_filename_component(model_short_name),
+        f"sid_{sanitize_filename_component(get_sid(dataset_id))}",
+        f"run_{run_num}",
+        f"examples_{train_examples}"
+    ]
+    run_name_suffix = LOG_SEP.join(run_name_components)
+    
+    # Combine finetune path with run_name suffix
+    full_run_name = f"{finetune_args.full_exp_name}__{run_name_suffix}"
+    adapter_dir = get_model_path(full_run_name, is_pretrain=False)
     
     if not os.path.exists(adapter_dir):
         raise FileNotFoundError(f"LoRA adapter directory not found: {adapter_dir}")
@@ -199,6 +217,8 @@ def main():
                        help='Run number used during finetuning')
     parser.add_argument('--custom_max_features', type=int, default=3000,
                        help='Maximum number of features (should match finetuning)')
+    parser.add_argument('--train_examples', type=int, default=10000,
+                       help='Number of training examples used during finetuning')
     
     # LoRA parameters (should match the finetuning run)
     parser.add_argument('--lora_lr', type=float, default=0.001,
@@ -246,7 +266,9 @@ def main():
             lora_batch=args.lora_batch,
             lora_r=args.lora_r,
             patience=args.patience,
-            device=device
+            device=device,
+            run_num=args.run_num,
+            train_examples=args.train_examples
         )
         
         # Load pretrain args for preprocessing
