@@ -14,7 +14,6 @@ from tabular.utils.io_handlers import load_json, dump_json
 from tabular.utils.logging import LOG_SEP
 from tabular.utils.paths import create_dir, train_results_path, sanitize_filename_component
 from tabular.utils.utils import fix_seed, SEED
-from tabular.utils.results import RunMetadata
 
 
 @dataclass
