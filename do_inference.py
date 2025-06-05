@@ -88,42 +88,39 @@ def load_finetuned_model(pretrain_exp: str, exp_name: str, lora_lr: float,
 
 
 def create_inference_dataset(data_dir: str, csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
-                           run_num: int, device: torch.device, custom_max_features: int = 3000):
-    """Create a dataset for inference where ALL data goes into the TRAIN split"""
+                           run_num: int, device: torch.device, custom_max_features: int = 3000,
+                           custom_test_csv_path: str = None):
+    """Create a dataset for inference using the EXACT same pipeline as training"""
     
     # Load raw dataset
     dataset_id = CustomDatasetID.CUSTOM_CSV
     raw_dataset = get_raw_dataset(dataset_id, custom_csv_path=csv_path, 
-                                 custom_target_column=target_column, custom_max_features=custom_max_features)
+                                 custom_target_column=target_column, custom_max_features=custom_max_features,
+                                 custom_test_csv_path=custom_test_csv_path)
+    
+    # Print consistent feature info to avoid confusion
+    feat_cnt_consistent = {feat_type.value: len(names) for feat_type, names in raw_dataset.feature_types.items()}
+    feat_cnt_display = {k.upper()[:3]: v for k, v in feat_cnt_consistent.items() if v > 0}
+    total_features = sum(feat_cnt_display.values())
+    cprint(f"📊 Inference dataset: {raw_dataset.sid}: {len(raw_dataset)} samples. {total_features} Features: {feat_cnt_display}. Task: {raw_dataset.task_type}")
     
     # Create artificial splits where ALL data goes to TRAIN
     n = len(raw_dataset.y)
     splits = [DataSplit.TRAIN] * n  # All data goes to train split
     
-    # Process dataset for TabSTAR
+    # CRITICAL FIX: Use the exact same TabularDataset.from_raw() method as training
+    # but override the splits to put all data in train split
+    from tabular.datasets.data_processing import TabularDataset
+    from tabular.preprocessing.splits import create_splits
     from tabular.preprocessing.target import process_y
-    from tabular.tabstar.preprocessing.numerical import scale_x_num_and_add_categorical_bins
-    from tabular.tabstar.preprocessing.textual import verbalize_x_txt
-    from tabular.tabstar.preprocessing.target import add_target_tokens
     
-    # Process targets
+    # Use the standard TabSTAR preprocessing pipeline
     targets = process_y(raw=raw_dataset, splits=splits, processing=TabStarTrainer.PROCESSING)
     feat_cnt = {feat_type.value: len(names) for feat_type, names in raw_dataset.feature_types.items()}
     
-    # Process for TabSTAR
-    x_txt, x_num = scale_x_num_and_add_categorical_bins(raw=raw_dataset, splits=splits,
-                                                       number_verbalization=pretrain_args.numbers_verbalization)
-    verbalize_x_txt(x_txt)
-    
-    # Create properties with all data in train split
-    properties = DatasetProperties.create(raw=raw_dataset, splits=splits, feat_cnt=feat_cnt, 
-                                         targets=targets, processing=TabStarTrainer.PROCESSING)
-    
-    # Add target tokens
-    x_txt, x_num = add_target_tokens(x_txt=x_txt, x_num=x_num, data=properties)
-    
-    # Create dataset
-    dataset = TabularDataset(properties=properties, x=x_txt, y=raw_dataset.y, splits=splits, x_num=x_num)
+    # Use the exact same TabSTAR processing as training
+    dataset = TabularDataset.for_tabstar(raw=raw_dataset, splits=splits, targets=targets, 
+                                       feat_cnt=feat_cnt, number_verbalization=pretrain_args.numbers_verbalization)
     
     # Fill text mappings
     fill_idx2text(dataset)
@@ -136,7 +133,8 @@ def create_inference_dataset(data_dir: str, csv_path: str, target_column: str, p
 
 
 def process_test_csv_for_inference(csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
-                                  run_num: int, device: torch.device, custom_max_features: int = 3000) -> str:
+                                  run_num: int, device: torch.device, custom_max_features: int = 3000,
+                                  custom_test_csv_path: str = None) -> str:
     """Process the test CSV specifically for inference, putting all data into train split"""
     
     # Create a custom dataset ID for the test data
@@ -158,7 +156,7 @@ def process_test_csv_for_inference(csv_path: str, target_column: str, pretrain_a
         try:
             create_inference_dataset(data_dir=data_dir, csv_path=csv_path, target_column=target_column,
                                    pretrain_args=pretrain_args, run_num=inference_run_num, device=device,
-                                   custom_max_features=custom_max_features)
+                                   custom_max_features=custom_max_features, custom_test_csv_path=custom_test_csv_path)
         except Exception as e:
             raise Exception(f"🚨🚨🚨 Error creating inference dataset due to: {e}")
     
@@ -166,11 +164,13 @@ def process_test_csv_for_inference(csv_path: str, target_column: str, pretrain_a
 
 
 def process_test_csv(csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
-                    run_num: int, device: torch.device, custom_max_features: int = 3000) -> str:
+                    run_num: int, device: torch.device, custom_max_features: int = 3000,
+                    custom_test_csv_path: str = None) -> str:
     """Process the test CSV using the same preprocessing pipeline as training"""
     
     # Use the new inference-specific function
-    return process_test_csv_for_inference(csv_path, target_column, pretrain_args, run_num, device, custom_max_features)
+    return process_test_csv_for_inference(csv_path, target_column, pretrain_args, run_num, device, 
+                                         custom_max_features, custom_test_csv_path)
 
 
 def run_inference(model: TabStarModel, data_dir: str, device: torch.device) -> Dict:
@@ -324,6 +324,8 @@ def main():
                        help='Number of training examples used during finetuning')
     parser.add_argument('--results_csv', type=str, default='results.csv',
                        help='Path to save results CSV file')
+    parser.add_argument('--custom_test_csv_path', type=str,
+                       help='Path to additional test CSV file (for two CSV mode, optional)')
     
     # LoRA parameters (should match the finetuning run)
     parser.add_argument('--lora_lr', type=float, default=0.001,
@@ -349,6 +351,9 @@ def main():
     if not os.path.exists(args.test_csv_path):
         raise FileNotFoundError(f"Test CSV file not found: {args.test_csv_path}")
     
+    if args.custom_test_csv_path and not os.path.exists(args.custom_test_csv_path):
+        raise FileNotFoundError(f"Additional test CSV file not found: {args.custom_test_csv_path}")
+    
     # Set device
     device = torch.device(get_device())
     cprint(f"Using device: {device}")
@@ -358,12 +363,16 @@ def main():
     
     # Create model identifier for results
     dataset_name = os.path.basename(args.test_csv_path)
+    if args.custom_test_csv_path:
+        dataset_name += f"+{os.path.basename(args.custom_test_csv_path)}"
     finetuned_model = f"{args.pretrain_exp}__{args.exp_name}__lr_{args.lora_lr}__r_{args.lora_r}__examples_{args.train_examples}"
     
     cprint(f"🚀 Starting inference with finetuned TabSTAR model...")
     cprint(f"   Pretrain experiment: {args.pretrain_exp}")
     cprint(f"   Finetune experiment: {args.exp_name}")
     cprint(f"   Test CSV: {args.test_csv_path}")
+    if args.custom_test_csv_path:
+        cprint(f"   Additional test CSV: {args.custom_test_csv_path}")
     cprint(f"   Target column: {args.target_column}")
     cprint(f"   Model identifier: {finetuned_model}")
     
@@ -392,7 +401,8 @@ def main():
             pretrain_args=pretrain_args,
             run_num=args.run_num,
             device=device,
-            custom_max_features=args.custom_max_features
+            custom_max_features=args.custom_max_features,
+            custom_test_csv_path=args.custom_test_csv_path
         )
         
         # Run inference and calculate metrics
