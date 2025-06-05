@@ -90,7 +90,7 @@ def load_finetuned_model(pretrain_exp: str, exp_name: str, lora_lr: float,
 def create_inference_dataset(data_dir: str, csv_path: str, target_column: str, pretrain_args: PretrainArgs, 
                            run_num: int, device: torch.device, custom_max_features: int = 3000,
                            custom_test_csv_path: str = None):
-    """Create a dataset for inference using the EXACT same pipeline as training"""
+    """Create a dataset for inference where ALL data goes into the TRAIN split"""
     
     # Load raw dataset
     dataset_id = CustomDatasetID.CUSTOM_CSV
@@ -98,29 +98,34 @@ def create_inference_dataset(data_dir: str, csv_path: str, target_column: str, p
                                  custom_target_column=target_column, custom_max_features=custom_max_features,
                                  custom_test_csv_path=custom_test_csv_path)
     
-    # Print consistent feature info to avoid confusion
-    feat_cnt_consistent = {feat_type.value: len(names) for feat_type, names in raw_dataset.feature_types.items()}
-    feat_cnt_display = {k.upper()[:3]: v for k, v in feat_cnt_consistent.items() if v > 0}
-    total_features = sum(feat_cnt_display.values())
-    cprint(f"📊 Inference dataset: {raw_dataset.sid}: {len(raw_dataset)} samples. {total_features} Features: {feat_cnt_display}. Task: {raw_dataset.task_type}")
-    
     # Create artificial splits where ALL data goes to TRAIN
     n = len(raw_dataset.y)
     splits = [DataSplit.TRAIN] * n  # All data goes to train split
     
-    # CRITICAL FIX: Use the exact same TabularDataset.from_raw() method as training
-    # but override the splits to put all data in train split
-    from tabular.datasets.data_processing import TabularDataset
-    from tabular.preprocessing.splits import create_splits
+    # Process dataset for TabSTAR
     from tabular.preprocessing.target import process_y
+    from tabular.tabstar.preprocessing.numerical import scale_x_num_and_add_categorical_bins
+    from tabular.tabstar.preprocessing.textual import verbalize_x_txt
+    from tabular.tabstar.preprocessing.target import add_target_tokens
     
-    # Use the standard TabSTAR preprocessing pipeline
+    # Process targets
     targets = process_y(raw=raw_dataset, splits=splits, processing=TabStarTrainer.PROCESSING)
     feat_cnt = {feat_type.value: len(names) for feat_type, names in raw_dataset.feature_types.items()}
     
-    # Use the exact same TabSTAR processing as training
-    dataset = TabularDataset.for_tabstar(raw=raw_dataset, splits=splits, targets=targets, 
-                                       feat_cnt=feat_cnt, number_verbalization=pretrain_args.numbers_verbalization)
+    # Process for TabSTAR
+    x_txt, x_num = scale_x_num_and_add_categorical_bins(raw=raw_dataset, splits=splits,
+                                                       number_verbalization=pretrain_args.numbers_verbalization)
+    verbalize_x_txt(x_txt)
+    
+    # Create properties with all data in train split
+    properties = DatasetProperties.create(raw=raw_dataset, splits=splits, feat_cnt=feat_cnt, 
+                                         targets=targets, processing=TabStarTrainer.PROCESSING)
+    
+    # Add target tokens
+    x_txt, x_num = add_target_tokens(x_txt=x_txt, x_num=x_num, data=properties)
+    
+    # Create dataset
+    dataset = TabularDataset(properties=properties, x=x_txt, y=raw_dataset.y, splits=splits, x_num=x_num)
     
     # Fill text mappings
     fill_idx2text(dataset)
