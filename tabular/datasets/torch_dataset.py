@@ -1,6 +1,6 @@
 import os.path
 from os.path import join
-from typing import Optional
+from typing import Optional, List
 
 import h5py
 import numpy as np
@@ -79,7 +79,7 @@ class HDF5Dataset(Dataset):
 def get_data_dir(dataset: TabularDatasetID, processing: PreprocessingMethod, run_num: int,
                  train_examples: int, device: torch.device, number_verbalization: Optional[NumberVerbalization] = None,
                  custom_csv_path: str = None, custom_target_column: str = None, custom_max_features: int = 2500,
-                 custom_test_csv_path: str = None) -> str:
+                 custom_test_csv_path: str = None, custom_test_csv_paths: List[str] = None) -> str:
     sid = get_sid(dataset)
     data_dir = join(dataset_run_properties_dir(run_num=run_num, train_examples=train_examples), processing, sid)
     if number_verbalization is not None and number_verbalization != NumberVerbalization.FULL:
@@ -91,7 +91,8 @@ def get_data_dir(dataset: TabularDatasetID, processing: PreprocessingMethod, run
             create_dataset(data_dir=data_dir, dataset=dataset, processing=processing, run_num=run_num,
                            train_examples=train_examples, device=device, number_verbalization=number_verbalization,
                            custom_csv_path=custom_csv_path, custom_target_column=custom_target_column, 
-                           custom_max_features=custom_max_features, custom_test_csv_path=custom_test_csv_path)
+                           custom_max_features=custom_max_features, custom_test_csv_path=custom_test_csv_path,
+                           custom_test_csv_paths=custom_test_csv_paths)
         except Exception as e:
             raise Exception(f"🚨🚨🚨 Error loading dataset {dataset} due to: {e}")
     return data_dir
@@ -100,10 +101,11 @@ def get_data_dir(dataset: TabularDatasetID, processing: PreprocessingMethod, run
 def create_dataset(data_dir: str, dataset: TabularDatasetID, processing: PreprocessingMethod, run_num: int,
                    train_examples: int, device: torch.device, number_verbalization: Optional[NumberVerbalization] = None,
                    custom_csv_path: str = None, custom_target_column: str = None, custom_max_features: int = 2500,
-                   custom_test_csv_path: str = None):
+                   custom_test_csv_path: str = None, custom_test_csv_paths: List[str] = None):
     fix_seed()
     raw_dataset = get_raw_dataset(dataset, custom_csv_path=custom_csv_path, custom_target_column=custom_target_column, 
-                                  custom_max_features=custom_max_features, custom_test_csv_path=custom_test_csv_path)
+                                  custom_max_features=custom_max_features, custom_test_csv_path=custom_test_csv_path,
+                                  custom_test_csv_paths=custom_test_csv_paths)
     dataset = TabularDataset.from_raw(raw=raw_dataset, processing=processing, run_num=run_num,
                                       train_examples=train_examples, device=device,
                                       number_verbalization=number_verbalization)
@@ -116,7 +118,8 @@ def create_dataset(data_dir: str, dataset: TabularDatasetID, processing: Preproc
 
 
 def get_raw_dataset(dataset: TabularDatasetID, custom_csv_path: str = None, custom_target_column: str = None, 
-                    custom_max_features: int = 2500, custom_test_csv_path: str = None) -> RawDataset:
+                    custom_max_features: int = 2500, custom_test_csv_path: str = None, 
+                    custom_test_csv_paths: List[str] = None) -> RawDataset:
     if isinstance(dataset, OpenMLDatasetID):
         return load_openml_dataset(dataset_id=dataset)
     elif isinstance(dataset, KaggleDatasetID):
@@ -128,7 +131,8 @@ def get_raw_dataset(dataset: TabularDatasetID, custom_csv_path: str = None, cust
             raise ValueError("For custom datasets, both custom_csv_path and custom_target_column must be provided")
         from tabular.datasets.custom_loader import load_custom_dataset
         return load_custom_dataset(dataset_id=dataset, csv_path=custom_csv_path, target_column=custom_target_column, 
-                                   max_features=custom_max_features, custom_test_csv_path=custom_test_csv_path)
+                                   max_features=custom_max_features, custom_test_csv_path=custom_test_csv_path,
+                                   custom_test_csv_paths=custom_test_csv_paths)
     raise TypeError(f"What is this dataset from type {type(dataset)}?")
 
 def fill_idx2text(dataset: TabularDataset):
@@ -153,9 +157,17 @@ def get_properties(data_dir: str) -> DatasetProperties:
 
 
 def save_data_splits(dataset: TabularDataset, data_dir: str, processing: PreprocessingMethod):
-    for split in DataSplit:
-        split_dir = get_split_dir(data_dir, split)
-        indices = [i for i, s in enumerate(dataset.splits) if s == split]
+    # Get all unique split names from the dataset
+    unique_splits = set(dataset.splits)
+    
+    for split_name in unique_splits:
+        split_dir = get_split_dir(data_dir, split_name)
+        indices = [i for i, s in enumerate(dataset.splits) if s == split_name]
+        
+        # Skip empty splits
+        if not indices:
+            continue
+            
         x = pd_indices_to_array(dataset.x, indices)
         y = pd_indices_to_array(dataset.y, indices)
         if processing == PreprocessingMethod.TABSTAR:

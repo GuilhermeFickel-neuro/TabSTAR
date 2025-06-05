@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from pandas import DataFrame
+from typing import List, Dict
 
 from tabular.datasets.manual_curation_mapping import get_curated
 from tabular.datasets.raw_dataset import RawDataset
@@ -30,9 +31,64 @@ class TwoCSVRawDataset(RawDataset):
         self.is_two_csv_mode = True
 
 
+class MultiTestCSVRawDataset(RawDataset):
+    """Special RawDataset that holds one train CSV and multiple test CSVs"""
+    
+    def __init__(self, train_dataset: RawDataset, test_datasets: List[RawDataset]):
+        # Use the train dataset as the base
+        super().__init__(
+            sid=train_dataset.sid,
+            x=train_dataset.x,
+            y=train_dataset.y,
+            task_type=train_dataset.task_type,
+            feature_types=train_dataset.feature_types,
+            curation=train_dataset.curation,
+            desc=train_dataset.desc,
+            source_name=train_dataset.source_name
+        )
+        # Store test datasets as list of dictionaries
+        self.test_datasets = []
+        for i, test_dataset in enumerate(test_datasets):
+            self.test_datasets.append({
+                'x': test_dataset.x,
+                'y': test_dataset.y,
+                'index': i,
+                'source_name': test_dataset.source_name
+            })
+        self.is_multi_test_csv_mode = True
+
+
+class InferenceMultiTestCSVRawDataset(RawDataset):
+    """Special RawDataset for inference that holds multiple test CSVs only"""
+    
+    def __init__(self, test_datasets: List[RawDataset]):
+        # Use the first test dataset as the base for metadata
+        first_test = test_datasets[0]
+        super().__init__(
+            sid=first_test.sid,
+            x=first_test.x,  # This will be replaced with combined data
+            y=first_test.y,  # This will be replaced with combined data
+            task_type=first_test.task_type,
+            feature_types=first_test.feature_types,
+            curation=first_test.curation,
+            desc=f"Inference dataset with {len(test_datasets)} test splits",
+            source_name=f"inference_multi_test"
+        )
+        # Store test datasets as list of dictionaries
+        self.test_datasets = []
+        for i, test_dataset in enumerate(test_datasets):
+            self.test_datasets.append({
+                'x': test_dataset.x,
+                'y': test_dataset.y,
+                'index': i,
+                'source_name': test_dataset.source_name
+            })
+        self.is_inference_multi_test_csv_mode = True
+
+
 def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_column: str, 
                        description: str = "Custom CSV dataset", max_features: int = 1000,
-                       custom_test_csv_path: str = None) -> RawDataset:
+                       custom_test_csv_path: str = None, custom_test_csv_paths: List[str] = None) -> RawDataset:
     """
     Load a custom CSV dataset for TabSTAR training/finetuning.
     
@@ -43,6 +99,7 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
         description: Optional description of the dataset
         max_features: Maximum number of features to include in the dataset
         custom_test_csv_path: Optional path to the test CSV file (for two CSV mode)
+        custom_test_csv_paths: Optional list of paths to multiple test CSV files (for multi-test CSV mode)
     
     Returns:
         RawDataset object ready for TabSTAR processing
@@ -50,12 +107,20 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"Training CSV file not found: {csv_path}")
     
-    # Check if using two CSV mode
-    if custom_test_csv_path is not None:
+    # Check mode: multi-test CSV takes precedence over two CSV mode
+    if custom_test_csv_paths is not None and len(custom_test_csv_paths) > 0:
+        # Multi-test CSV mode
+        for test_csv_path in custom_test_csv_paths:
+            if not os.path.exists(test_csv_path):
+                raise FileNotFoundError(f"Test CSV file not found: {test_csv_path}")
+        return _load_multi_test_csv_dataset(dataset_id, csv_path, custom_test_csv_paths, target_column, description, max_features)
+    elif custom_test_csv_path is not None:
+        # Two CSV mode (original)
         if not os.path.exists(custom_test_csv_path):
             raise FileNotFoundError(f"Test CSV file not found: {custom_test_csv_path}")
         return _load_two_csv_dataset(dataset_id, csv_path, custom_test_csv_path, target_column, description, max_features)
     else:
+        # Single CSV mode (original)
         return _load_single_csv_dataset(dataset_id, csv_path, target_column, description, max_features)
 
 
@@ -112,6 +177,57 @@ def _load_two_csv_dataset(dataset_id: CustomDatasetID, train_csv_path: str, test
     
     # Return special TwoCSVRawDataset
     return TwoCSVRawDataset(train_dataset, test_dataset)
+
+
+def _load_multi_test_csv_dataset(dataset_id: CustomDatasetID, train_csv_path: str, test_csv_paths: List[str], 
+                                target_column: str, description: str, max_features: int) -> MultiTestCSVRawDataset:
+    """Load one train CSV and multiple test CSVs and create a MultiTestCSVRawDataset"""
+    
+    # Load train CSV
+    train_df = _load_csv_file(train_csv_path)
+    
+    if target_column not in train_df.columns:
+        raise ValueError(f"Target column '{target_column}' not found in training CSV. Available columns: {list(train_df.columns)}")
+    
+    # Load all test CSVs and validate them
+    test_dfs = []
+    train_cols = set(train_df.columns)
+    
+    for i, test_csv_path in enumerate(test_csv_paths):
+        test_df = _load_csv_file(test_csv_path)
+        
+        # Validate target column exists
+        if target_column not in test_df.columns:
+            raise ValueError(f"Target column '{target_column}' not found in test CSV {i+1} ({test_csv_path}). Available columns: {list(test_df.columns)}")
+        
+        # Validate that test CSV has the same columns as train CSV
+        test_cols = set(test_df.columns)
+        
+        if train_cols != test_cols:
+            missing_in_test = train_cols - test_cols
+            missing_in_train = test_cols - train_cols
+            error_msg = f"Column mismatch between training CSV and test CSV {i+1} ({test_csv_path})."
+            if missing_in_test:
+                error_msg += f" Missing in test: {missing_in_test}."
+            if missing_in_train:
+                error_msg += f" Missing in train: {missing_in_train}."
+            raise ValueError(error_msg)
+        
+        test_dfs.append(test_df)
+    
+    # Create train dataset
+    train_description = f"{description} (train split)"
+    train_dataset = _create_raw_dataset_from_df(train_df, target_column, dataset_id, train_description, max_features, train_csv_path)
+    
+    # Create test datasets
+    test_datasets = []
+    for i, (test_df, test_csv_path) in enumerate(zip(test_dfs, test_csv_paths)):
+        test_description = f"{description} (test split {i+1})"
+        test_dataset = _create_raw_dataset_from_df(test_df, target_column, dataset_id, test_description, max_features, test_csv_path)
+        test_datasets.append(test_dataset)
+    
+    # Return special MultiTestCSVRawDataset
+    return MultiTestCSVRawDataset(train_dataset, test_datasets)
 
 
 def _load_csv_file(file_path: str) -> DataFrame:
@@ -204,3 +320,46 @@ def _create_raw_dataset_from_df(df: DataFrame, target_column: str, dataset_id: C
     )
     
     return raw 
+
+
+def load_inference_multi_test_dataset(dataset_id: CustomDatasetID, test_csv_paths: List[str], 
+                                     target_column: str, description: str = "Inference multi-test dataset", 
+                                     max_features: int = 1000) -> InferenceMultiTestCSVRawDataset:
+    """Load multiple test CSVs for inference and create an InferenceMultiTestCSVRawDataset"""
+    
+    # Load all test CSVs and validate them
+    test_dfs = []
+    first_cols = None
+    
+    for i, test_csv_path in enumerate(test_csv_paths):
+        test_df = _load_csv_file(test_csv_path)
+        
+        # Validate target column exists
+        if target_column not in test_df.columns:
+            raise ValueError(f"Target column '{target_column}' not found in test CSV {i+1} ({test_csv_path}). Available columns: {list(test_df.columns)}")
+        
+        # Validate that all test CSVs have the same columns
+        test_cols = set(test_df.columns)
+        if first_cols is None:
+            first_cols = test_cols
+        elif first_cols != test_cols:
+            missing_in_current = first_cols - test_cols
+            missing_in_first = test_cols - first_cols
+            error_msg = f"Column mismatch between test CSV 1 and test CSV {i+1} ({test_csv_path})."
+            if missing_in_current:
+                error_msg += f" Missing in current: {missing_in_current}."
+            if missing_in_first:
+                error_msg += f" Missing in first: {missing_in_first}."
+            raise ValueError(error_msg)
+        
+        test_dfs.append(test_df)
+    
+    # Create test datasets
+    test_datasets = []
+    for i, (test_df, test_csv_path) in enumerate(zip(test_dfs, test_csv_paths)):
+        test_description = f"{description} (test split {i+1})"
+        test_dataset = _create_raw_dataset_from_df(test_df, target_column, dataset_id, test_description, max_features, test_csv_path)
+        test_datasets.append(test_dataset)
+    
+    # Return special InferenceMultiTestCSVRawDataset
+    return InferenceMultiTestCSVRawDataset(test_datasets) 

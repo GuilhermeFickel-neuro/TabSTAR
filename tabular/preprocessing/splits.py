@@ -25,10 +25,29 @@ class DataSplit(StrEnum):
     DEV = "dev"
     TEST = "test"
 
+    @classmethod
+    def get_test_split_name(cls, test_index: int) -> str:
+        """Generate test split name for multiple test datasets"""
+        if test_index == 0:
+            return cls.TEST  # First test split uses the standard "test" name
+        else:
+            return f"test{test_index + 1}"  # Additional test splits: test2, test3, etc.
+
+    @classmethod
+    def get_all_test_splits(cls, num_test_datasets: int) -> List[str]:
+        """Get all test split names for the given number of test datasets"""
+        return [cls.get_test_split_name(i) for i in range(num_test_datasets)]
+
 
 def create_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> List[DataSplit]:
+    # Check if this is an inference multi-test CSV mode dataset
+    if hasattr(raw, 'is_inference_multi_test_csv_mode') and raw.is_inference_multi_test_csv_mode:
+        return create_inference_multi_test_csv_splits(raw, run_num, train_examples, processing)
+    # Check if this is a multi-test CSV mode dataset
+    elif hasattr(raw, 'is_multi_test_csv_mode') and raw.is_multi_test_csv_mode:
+        return create_multi_test_csv_splits(raw, run_num, train_examples, processing)
     # Check if this is a two CSV mode dataset
-    if hasattr(raw, 'is_two_csv_mode') and raw.is_two_csv_mode:
+    elif hasattr(raw, 'is_two_csv_mode') and raw.is_two_csv_mode:
         return create_two_csv_splits(raw, run_num, train_examples, processing)
     
     # Original single CSV logic
@@ -182,3 +201,114 @@ def _uses_dev(processing: PreprocessingMethod) -> bool:
                    PreprocessingMethod.CARTE: False,
                    }
     return process2dev[processing]
+
+def create_multi_test_csv_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> List[DataSplit]:
+    """Create splits for multi-test CSV mode: train CSV -> train/dev splits, multiple test CSVs -> test1, test2, ... splits"""
+    
+    train_n = len(raw.y)  # Size of train CSV data
+    num_test_datasets = len(raw.test_datasets)
+    test_sizes = [len(test_data['y']) for test_data in raw.test_datasets]
+    total_test_n = sum(test_sizes)
+    total_n = train_n + total_test_n
+    
+    if train_n < MIN_TOTAL_EXAMPLES:
+        raise ValueError(f"Training dataset {raw.sid} has too few examples: {train_n}")
+    
+    is_pretrain = bool(train_examples < 0)
+    use_dev = _uses_dev(processing)
+    
+    # Create indices for train data (0 to train_n-1)
+    train_indices = list(range(train_n))
+    
+    if not is_pretrain:
+        # Apply train_examples limit if specified
+        train_indices, exclude = _get_exclude_two_csv(raw=raw, indices=train_indices, run_num=run_num, train_examples=train_examples)
+    
+    # Split train data into train/dev
+    train_final, dev = _get_train_dev(raw=raw, indices=train_indices, use_dev=use_dev, run_num=run_num, is_pretrain=is_pretrain)
+    
+    # Create test indices for each test dataset
+    test_splits = {}
+    current_idx = train_n
+    for i, test_size in enumerate(test_sizes):
+        test_split_name = DataSplit.get_test_split_name(i)
+        test_indices = list(range(current_idx, current_idx + test_size))
+        test_splits[test_split_name] = test_indices
+        current_idx += test_size
+    
+    # Combine all datasets: train data first, then all test data
+    combined_x_list = [raw.x]
+    combined_y_list = [raw.y]
+    
+    for test_data in raw.test_datasets:
+        combined_x_list.append(test_data['x'])
+        combined_y_list.append(test_data['y'])
+    
+    combined_x = pd.concat(combined_x_list, ignore_index=True)
+    combined_y = pd.concat(combined_y_list, ignore_index=True)
+    
+    # Update the raw dataset to contain combined data
+    raw.x = combined_x
+    raw.y = combined_y
+    
+    # Create split assignments
+    splits = {DataSplit.TRAIN: train_final, DataSplit.DEV: dev}
+    splits.update(test_splits)
+    
+    split_array = _create_split_array_multi_csv(total_n, splits)
+    
+    test_summary = ', '.join([f"{name}={len(indices)}" for name, indices in test_splits.items()])
+    verbose_print(f"Created multi-test CSV splits for {raw.sid}: train_data={train_n}, test_datasets=({test_summary}), {train_examples=}: {Counter(split_array)}")
+    return split_array
+
+
+def _create_split_array_multi_csv(total_n: int, splits: Dict[str, List[int]]) -> List[str]:
+    """Create split array for multi-test CSV mode without sampling (data is already combined)"""
+    idx2split = {i: split for split, indices in splits.items() for i in indices}
+    split_array = [idx2split.get(i) for i in range(total_n)]
+    # All indices should be assigned in multi-test CSV mode
+    assert all(s is not None for s in split_array), "Some indices were not assigned to any split"
+    return split_array
+
+def create_inference_multi_test_csv_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> List[DataSplit]:
+    """Create splits for inference-only mode: multiple test CSVs -> test1, test2, ... splits (no train/dev)"""
+    
+    num_test_datasets = len(raw.test_datasets)
+    test_sizes = [len(test_data['y']) for test_data in raw.test_datasets]
+    total_n = sum(test_sizes)
+    
+    if total_n < MIN_TOTAL_EXAMPLES:
+        raise ValueError(f"Total test dataset {raw.sid} has too few examples: {total_n}")
+    
+    # Create test indices for each test dataset (no train/dev splits needed for inference)
+    test_splits = {}
+    current_idx = 0
+    for i, test_size in enumerate(test_sizes):
+        test_split_name = DataSplit.get_test_split_name(i)
+        test_indices = list(range(current_idx, current_idx + test_size))
+        test_splits[test_split_name] = test_indices
+        current_idx += test_size
+    
+    # Combine all test datasets
+    combined_x_list = []
+    combined_y_list = []
+    
+    for test_data in raw.test_datasets:
+        combined_x_list.append(test_data['x'])
+        combined_y_list.append(test_data['y'])
+    
+    combined_x = pd.concat(combined_x_list, ignore_index=True)
+    combined_y = pd.concat(combined_y_list, ignore_index=True)
+    
+    # Update the raw dataset to contain combined data
+    raw.x = combined_x
+    raw.y = combined_y
+    
+    # Create split assignments (only test splits, no train/dev)
+    splits = test_splits
+    
+    split_array = _create_split_array_multi_csv(total_n, splits)
+    
+    test_summary = ', '.join([f"{name}={len(indices)}" for name, indices in test_splits.items()])
+    verbose_print(f"Created inference-only test splits for {raw.sid}: test_datasets=({test_summary}), total={total_n}: {Counter(split_array)}")
+    return split_array

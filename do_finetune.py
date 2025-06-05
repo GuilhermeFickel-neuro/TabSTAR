@@ -1,5 +1,5 @@
 import argparse
-from typing import Optional
+from typing import Optional, List
 
 import torch
 
@@ -22,7 +22,8 @@ def finetune_tabstar(finetune_args: FinetuneArgs,
                      custom_csv_path: str = None,
                      custom_target_column: str = None,
                      custom_max_features: int = 2500,
-                     custom_test_csv_path: str = None):
+                     custom_test_csv_path: str = None,
+                     custom_test_csv_paths: List[str] = None):
     if device is None:
         device = torch.device(get_device())
     if dataset.value in finetune_args.pretrain_args.datasets:
@@ -31,7 +32,7 @@ def finetune_tabstar(finetune_args: FinetuneArgs,
                     finetune_args=finetune_args, exp_name=finetune_args.full_exp_name,
                     train_examples=train_examples, custom_csv_path=custom_csv_path,
                     custom_target_column=custom_target_column, custom_max_features=custom_max_features,
-                    custom_test_csv_path=custom_test_csv_path)
+                    custom_test_csv_path=custom_test_csv_path, custom_test_csv_paths=custom_test_csv_paths)
 
 
 
@@ -53,6 +54,7 @@ if __name__ == "__main__":
     parser.add_argument('--custom_target_column', type=str, help='Name of target column in custom CSV (required when dataset_id is "custom")')
     parser.add_argument('--custom_max_features', type=int, default=1000, help='Maximum number of features for custom datasets (default: 1000)')
     parser.add_argument('--custom_test_csv_path', type=str, help='Path to test CSV file (optional, for two CSV mode)')
+    parser.add_argument('--custom_test_csv_paths', type=str, nargs='+', help='Paths to multiple test CSV files (optional, for multi-test CSV mode)')
 
     args = parser.parse_args()
     assert args.pretrain_exp, "Pretrain path is required"
@@ -65,6 +67,10 @@ if __name__ == "__main__":
             raise ValueError("Custom dataset file must be a CSV file")
         if args.custom_test_csv_path and not args.custom_test_csv_path.endswith('.csv'):
             raise ValueError("Custom test dataset file must be a CSV file")
+        if args.custom_test_csv_paths:
+            for test_csv_path in args.custom_test_csv_paths:
+                if not test_csv_path.endswith('.csv'):
+                    raise ValueError(f"Custom test dataset file must be a CSV file: {test_csv_path}")
     
     data = get_dataset_from_arg(args.dataset_id)
     assert 0 <= args.run_num < N_RUNS, f"Invalid run number: {args.run_num}. Should be between 0 and {N_RUNS - 1}"
@@ -74,4 +80,5 @@ if __name__ == "__main__":
     finetune_tabstar(finetune_args=run_args, dataset=data,
                      run_num=args.run_num, train_examples=args.downstream_examples,
                      custom_csv_path=args.custom_csv_path, custom_target_column=args.custom_target_column,
-                     custom_max_features=args.custom_max_features, custom_test_csv_path=args.custom_test_csv_path)
+                     custom_max_features=args.custom_max_features, custom_test_csv_path=args.custom_test_csv_path,
+                     custom_test_csv_paths=args.custom_test_csv_paths)
