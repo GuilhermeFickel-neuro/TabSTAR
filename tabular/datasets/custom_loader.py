@@ -216,10 +216,9 @@ def _load_multi_test_csv_dataset(dataset_id: CustomDatasetID, train_csv_path: st
         test_dfs.append(test_df)
     
     # CRITICAL: Combine ALL DataFrames BEFORE any preprocessing
-    # Add a source identifier to track which CSV each row came from
-    train_df['_temp_source'] = 'train'
-    for i, test_df in enumerate(test_dfs):
-        test_df['_temp_source'] = f'test_{i}'
+    # Track indices instead of using a temporary column that might get filtered out
+    train_size = len(train_df)
+    test_sizes = [len(test_df) for test_df in test_dfs]
     
     # Combine all DataFrames
     all_dfs = [train_df] + test_dfs
@@ -229,13 +228,10 @@ def _load_multi_test_csv_dataset(dataset_id: CustomDatasetID, train_csv_path: st
     combined_description = f"{description} (combined train + {len(test_csv_paths)} test CSVs)"
     combined_dataset = _create_raw_dataset_from_df(combined_df, target_column, dataset_id, combined_description, max_features, train_csv_path)
     
-    # Now split the processed data back into train and test components
-    source_col = combined_dataset.x['_temp_source']
-    
-    # Extract train data
-    train_mask = (source_col == 'train')
-    train_x = combined_dataset.x[train_mask].drop(columns=['_temp_source']).reset_index(drop=True)
-    train_y = combined_dataset.y[train_mask].reset_index(drop=True)
+    # Now split the processed data back into train and test components using indices
+    # Train data: indices 0 to train_size-1
+    train_x = combined_dataset.x.iloc[:train_size].reset_index(drop=True)
+    train_y = combined_dataset.y.iloc[:train_size].reset_index(drop=True)
     
     # Create train dataset with the processed data
     train_dataset = RawDataset(
@@ -249,12 +245,13 @@ def _load_multi_test_csv_dataset(dataset_id: CustomDatasetID, train_csv_path: st
         source_name=f"train_{os.path.basename(train_csv_path)}"
     )
     
-    # Extract test datasets
+    # Extract test datasets using the known sizes
     test_datasets = []
-    for i, test_csv_path in enumerate(test_csv_paths):
-        test_mask = (source_col == f'test_{i}')
-        test_x = combined_dataset.x[test_mask].drop(columns=['_temp_source']).reset_index(drop=True)
-        test_y = combined_dataset.y[test_mask].reset_index(drop=True)
+    current_idx = train_size
+    for i, (test_size, test_csv_path) in enumerate(zip(test_sizes, test_csv_paths)):
+        # Test data: indices current_idx to current_idx+test_size-1
+        test_x = combined_dataset.x.iloc[current_idx:current_idx+test_size].reset_index(drop=True)
+        test_y = combined_dataset.y.iloc[current_idx:current_idx+test_size].reset_index(drop=True)
         
         test_dataset = RawDataset(
             sid=combined_dataset.sid,
@@ -267,6 +264,7 @@ def _load_multi_test_csv_dataset(dataset_id: CustomDatasetID, train_csv_path: st
             source_name=f"test_{i}_{os.path.basename(test_csv_path)}"
         )
         test_datasets.append(test_dataset)
+        current_idx += test_size
     
     # Return special MultiTestCSVRawDataset
     return MultiTestCSVRawDataset(train_dataset, test_datasets)
