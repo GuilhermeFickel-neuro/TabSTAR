@@ -205,7 +205,7 @@ def _uses_dev(processing: PreprocessingMethod) -> bool:
 def create_multi_test_csv_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> List[DataSplit]:
     """Create splits for multi-test CSV mode: train CSV -> train/dev splits, multiple test CSVs -> test1, test2, ... splits"""
     
-    train_n = len(raw.y)  # Size of train CSV data
+    train_n = len(raw.y)  # Size of train CSV data  
     num_test_datasets = len(raw.test_datasets)
     test_sizes = [len(test_data['y']) for test_data in raw.test_datasets]
     total_test_n = sum(test_sizes)
@@ -227,15 +227,6 @@ def create_multi_test_csv_splits(raw: RawDataset, run_num: int, train_examples: 
     # Split train data into train/dev
     train_final, dev = _get_train_dev(raw=raw, indices=train_indices, use_dev=use_dev, run_num=run_num, is_pretrain=is_pretrain)
     
-    # Create test indices for each test dataset
-    test_splits = {}
-    current_idx = train_n
-    for i, test_size in enumerate(test_sizes):
-        test_split_name = DataSplit.get_test_split_name(i)
-        test_indices = list(range(current_idx, current_idx + test_size))
-        test_splits[test_split_name] = test_indices
-        current_idx += test_size
-    
     # Combine all datasets: train data first, then all test data
     combined_x_list = [raw.x]
     combined_y_list = [raw.y]
@@ -247,15 +238,52 @@ def create_multi_test_csv_splits(raw: RawDataset, run_num: int, train_examples: 
     combined_x = pd.concat(combined_x_list, ignore_index=True)
     combined_y = pd.concat(combined_y_list, ignore_index=True)
     
-    # Update the raw dataset to contain combined data
-    raw.x = combined_x
-    raw.y = combined_y
+    # Create test indices for each test dataset - they start right after train data
+    test_splits = {}
+    current_idx = train_n  # Test data starts after ALL train data
+    for i, test_size in enumerate(test_sizes):
+        test_split_name = DataSplit.get_test_split_name(i)
+        test_indices = list(range(current_idx, current_idx + test_size))
+        test_splits[test_split_name] = test_indices
+        current_idx += test_size
     
-    # Create split assignments
-    splits = {DataSplit.TRAIN: train_final, DataSplit.DEV: dev}
-    splits.update(test_splits)
+    # Determine which indices to keep: selected train/dev indices + ALL test indices
+    valid_indices = set()
+    if train_final:
+        valid_indices.update(train_final)
+    if dev:
+        valid_indices.update(dev)
     
-    split_array = _create_split_array_multi_csv(total_n, splits)
+    # Add all test indices (we want to keep all test data)
+    for test_indices in test_splits.values():
+        valid_indices.update(test_indices)
+    
+    # Sort for consistent ordering
+    valid_indices = sorted(list(valid_indices))
+    
+    # Filter the combined data to only include valid indices
+    filtered_x = combined_x.iloc[valid_indices].reset_index(drop=True)
+    filtered_y = combined_y.iloc[valid_indices].reset_index(drop=True)
+    
+    # Create index mapping: old_index -> new_index
+    old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(valid_indices)}
+    
+    # Remap split indices to new indices
+    remapped_splits = {}
+    if train_final:
+        remapped_splits[DataSplit.TRAIN] = [old_to_new[i] for i in train_final]
+    if dev:
+        remapped_splits[DataSplit.DEV] = [old_to_new[i] for i in dev]
+    
+    for split_name, indices in test_splits.items():
+        remapped_splits[split_name] = [old_to_new[i] for i in indices]
+    
+    # Update the raw dataset with filtered data
+    raw.x = filtered_x
+    raw.y = filtered_y
+    
+    # Create split array for the filtered data
+    split_array = _create_split_array_multi_csv(len(valid_indices), remapped_splits)
     
     test_summary = ', '.join([f"{name}={len(indices)}" for name, indices in test_splits.items()])
     verbose_print(f"Created multi-test CSV splits for {raw.sid}: train_data={train_n}, test_datasets=({test_summary}), {train_examples=}: {Counter(split_array)}")
@@ -263,10 +291,10 @@ def create_multi_test_csv_splits(raw: RawDataset, run_num: int, train_examples: 
 
 
 def _create_split_array_multi_csv(total_n: int, splits: Dict[str, List[int]]) -> List[str]:
-    """Create split array for multi-test CSV mode without sampling (data is already combined)"""
+    """Create split array for multi-test CSV mode without exclusions (data is already filtered)"""
     idx2split = {i: split for split, indices in splits.items() for i in indices}
     split_array = [idx2split.get(i) for i in range(total_n)]
-    # All indices should be assigned in multi-test CSV mode
+    # All indices should be assigned in filtered multi-test CSV mode
     assert all(s is not None for s in split_array), "Some indices were not assigned to any split"
     return split_array
 
