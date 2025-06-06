@@ -10,7 +10,7 @@ from tabular.utils.logging import LOG_SEP
 from tabular.utils.paths import pretrain_args_path, create_dir, sanitize_filename_component
 from tabular.utils.utils import get_current_commit_hash, get_today, verbose_print, str_float
 
-MAX_EPOCH_EXAMPLES = 2048
+MAX_EPOCH_EXAMPLES = 10000000
 if MAX_EPOCH_EXAMPLES % BATCH_SIZE != 0:
     raise ValueError(f"MAX_EPOCH_EXAMPLES must be divisible by {BATCH_SIZE}")
 
