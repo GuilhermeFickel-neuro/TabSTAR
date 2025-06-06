@@ -11,26 +11,6 @@ from tabular.datasets.tabular_datasets import get_sid, CustomDatasetID
 from tabular.preprocessing.feature_type import get_feature_types
 
 
-class TwoCSVRawDataset(RawDataset):
-    """Special RawDataset that holds both train and test data separately for two CSV mode"""
-    
-    def __init__(self, train_dataset: RawDataset, test_dataset: RawDataset):
-        # Use the train dataset as the base, but store test data separately
-        super().__init__(
-            sid=train_dataset.sid,
-            x=train_dataset.x,
-            y=train_dataset.y,
-            task_type=train_dataset.task_type,
-            feature_types=train_dataset.feature_types,
-            curation=train_dataset.curation,
-            desc=train_dataset.desc,
-            source_name=train_dataset.source_name
-        )
-        self.test_x = test_dataset.x
-        self.test_y = test_dataset.y
-        self.is_two_csv_mode = True
-
-
 class MultiTestCSVRawDataset(RawDataset):
     """Special RawDataset that holds one train CSV and multiple test CSVs"""
     
@@ -130,47 +110,6 @@ def _load_single_csv_dataset(dataset_id: CustomDatasetID, csv_path: str, target_
         raise ValueError(f"Target column '{target_column}' not found in CSV. Available columns: {list(df.columns)}")
     
     return _create_raw_dataset_from_df(df, target_column, dataset_id, description, max_features, csv_path)
-
-
-def _load_two_csv_dataset(dataset_id: CustomDatasetID, train_csv_path: str, test_csv_path: str, 
-                         target_column: str, description: str, max_features: int) -> TwoCSVRawDataset:
-    """Load two CSV datasets and create a special TwoCSVRawDataset"""
-    
-    # Load both CSV files
-    train_df = _load_csv_file(train_csv_path)
-    test_df = _load_csv_file(test_csv_path)
-    
-    # Validate target column exists in both
-    if target_column not in train_df.columns:
-        raise ValueError(f"Target column '{target_column}' not found in training CSV. Available columns: {list(train_df.columns)}")
-    
-    if target_column not in test_df.columns:
-        raise ValueError(f"Target column '{target_column}' not found in test CSV. Available columns: {list(test_df.columns)}")
-    
-    # Validate that both CSVs have the same columns
-    train_cols = set(train_df.columns)
-    test_cols = set(test_df.columns)
-    
-    if train_cols != test_cols:
-        missing_in_test = train_cols - test_cols
-        missing_in_train = test_cols - train_cols
-        error_msg = f"Column mismatch between training and test CSVs."
-        if missing_in_test:
-            error_msg += f" Missing in test: {missing_in_test}."
-        if missing_in_train:
-            error_msg += f" Missing in train: {missing_in_train}."
-        raise ValueError(error_msg)
-    
-    # Create train dataset
-    train_description = f"{description} (train split)"
-    train_dataset = _create_raw_dataset_from_df(train_df, target_column, dataset_id, train_description, max_features, train_csv_path)
-    
-    # Create test dataset  
-    test_description = f"{description} (test split)"
-    test_dataset = _create_raw_dataset_from_df(test_df, target_column, dataset_id, test_description, max_features, test_csv_path)
-    
-    # Return special TwoCSVRawDataset
-    return TwoCSVRawDataset(train_dataset, test_dataset)
 
 
 def _load_multi_test_csv_dataset(dataset_id: CustomDatasetID, train_csv_path: str, test_csv_paths: List[str], 

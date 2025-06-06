@@ -30,7 +30,6 @@ if __name__ == "__main__":
     parser.add_argument('--custom_csv_path', type=str, help='Path to custom CSV file (required when dataset_id is "custom")')
     parser.add_argument('--custom_target_column', type=str, help='Name of target column in custom CSV (required when dataset_id is "custom")')
     parser.add_argument('--custom_max_features', type=int, default=1000, help='Maximum number of features for custom datasets (default: 1000)')
-    parser.add_argument('--custom_test_csv_path', type=str, help='Path to test CSV file (optional, for two CSV mode)')
     args = parser.parse_args()
 
     cprint(f"🧹 Running {args.exp} with {args.model} on dataset {args.dataset_id} for run {args.run_num}")
@@ -45,8 +44,6 @@ if __name__ == "__main__":
             raise ValueError("For custom datasets, both --custom_csv_path and --custom_target_column must be provided")
         if not args.custom_csv_path.endswith('.csv'):
             raise ValueError("Custom dataset file must be a CSV file")
-        if args.custom_test_csv_path and not args.custom_test_csv_path.endswith('.csv'):
-            raise ValueError("Custom test dataset file must be a CSV file")
 
     dataset = get_dataset_from_arg(args.dataset_id)
     device = torch.device(get_device())
@@ -56,4 +53,4 @@ if __name__ == "__main__":
 
     do_finetune_run(exp_name=args.exp, dataset=dataset, model=model, run_num=args.run_num, train_examples=n_examples,
                     device=device, custom_csv_path=args.custom_csv_path, custom_target_column=args.custom_target_column,
-                    custom_max_features=args.custom_max_features, custom_test_csv_path=args.custom_test_csv_path)
+                    custom_max_features=args.custom_max_features)
