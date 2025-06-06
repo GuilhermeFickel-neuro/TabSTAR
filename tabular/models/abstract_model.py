@@ -26,7 +26,7 @@ class TabularModel:
     def __init__(self, run_name: str, dataset_ids: List[TabularDatasetID], device: torch.device,
                  run_num: int, train_examples: int = 0, args: Optional[PretrainArgs] = None,
                  carte_lr_index: Optional[int] = None, custom_csv_path: str = None, custom_target_column: str = None, 
-                 custom_max_features: int = 2500, custom_test_csv_path: str = None, custom_test_csv_paths: List[str] = None):
+                 custom_max_features: int = 2500, custom_test_csv_paths: List[str] = None):
         fix_seed()
         self.run_name = run_name
         self.dataset_ids = dataset_ids
@@ -37,7 +37,6 @@ class TabularModel:
         self.custom_csv_path = custom_csv_path
         self.custom_target_column = custom_target_column
         self.custom_max_features = custom_max_features
-        self.custom_test_csv_path = custom_test_csv_path
         self.custom_test_csv_paths = custom_test_csv_paths
         self.data_dirs: List[str] = self.initialize_data_dirs()
         self.datasets: List[DatasetProperties] = [get_properties(d) for d in self.data_dirs]
@@ -51,18 +50,13 @@ class TabularModel:
 
     def initialize_data_dirs(self) -> List[str]:
         data_dirs = []
-        for d in tqdm(self.dataset_ids, desc="Initializing data dirs", leave=False):
-            if isinstance(self.args, PretrainArgs):
-                number_verbalization = self.args.numbers_verbalization
-            elif isinstance(self.args, FinetuneArgs):
-                number_verbalization = self.args.pretrain_args.numbers_verbalization
-            else:
-                number_verbalization = None
+        for d in self.dataset_ids:
             data = get_data_dir(dataset=d, processing=self.PROCESSING, run_num=self.run_num,
                                 train_examples=self.train_examples, device=self.device,
-                                number_verbalization=number_verbalization,
-                                custom_csv_path=self.custom_csv_path, custom_target_column=self.custom_target_column,
-                                custom_max_features=self.custom_max_features, custom_test_csv_path=self.custom_test_csv_path,
+                                number_verbalization=self.args.numbers_verbalization if isinstance(self.args, PretrainArgs) else None,
+                                custom_csv_path=self.custom_csv_path,
+                                custom_target_column=self.custom_target_column,
+                                custom_max_features=self.custom_max_features,
                                 custom_test_csv_paths=self.custom_test_csv_paths)
             data_dirs.append(data)
         return data_dirs

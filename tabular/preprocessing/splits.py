@@ -9,6 +9,7 @@ from sklearn.model_selection import train_test_split
 from tabular.datasets.raw_dataset import RawDataset
 from tabular.preprocessing.objects import SupervisedTask, PreprocessingMethod, CV_METHODS
 from tabular.utils.utils import SEED, verbose_print
+from tabular.datasets.custom_loader import TwoCSVRawDataset, MultiTestCSVRawDataset
 
 TEST_RATIO = 0.1
 MAX_TEST_SIZE = 2000
@@ -39,34 +40,68 @@ class DataSplit(StrEnum):
         return [cls.get_test_split_name(i) for i in range(num_test_datasets)]
 
 
-def create_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> List[DataSplit]:
-    # Check if this is an inference multi-test CSV mode dataset
-    if hasattr(raw, 'is_inference_multi_test_csv_mode') and raw.is_inference_multi_test_csv_mode:
-        return create_inference_multi_test_csv_splits(raw, run_num, train_examples, processing)
-    # Check if this is a multi-test CSV mode dataset
-    elif hasattr(raw, 'is_multi_test_csv_mode') and raw.is_multi_test_csv_mode:
+def create_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> TabularDatasetSplits:
+    if isinstance(raw, MultiTestCSVRawDataset):
         return create_multi_test_csv_splits(raw, run_num, train_examples, processing)
-    # Check if this is a two CSV mode dataset
-    elif hasattr(raw, 'is_two_csv_mode') and raw.is_two_csv_mode:
-        return create_two_csv_splits(raw, run_num, train_examples, processing)
-    
-    # Original single CSV logic
-    n = len(raw.y)
-    if n < MIN_TOTAL_EXAMPLES:
-        raise ValueError(f"Dataset {raw.sid} has too few examples: {n}")
-    indices = list(range(n))
-    is_pretrain = bool(train_examples < 0)
-    use_dev = _uses_dev(processing)
-    if is_pretrain:
-        test = []
     else:
-        indices, test = _get_test(raw=raw, indices=indices, n=n, run_num=run_num)
-        indices, exclude = _get_exclude(raw=raw, indices=indices, run_num=run_num, train_examples=train_examples)
-    train, dev = _get_train_dev(raw=raw, indices=indices, use_dev=use_dev, run_num=run_num, is_pretrain=is_pretrain)
-    splits = {DataSplit.TRAIN: train, DataSplit.DEV: dev, DataSplit.TEST: test}
-    split_array = _sample_xy_and_get_array(raw=raw, n=n, splits=splits)
-    verbose_print(f"Created splits for {raw.sid} of length {n} and {train_examples=}: {Counter(split_array)}")
-    return split_array
+        # Default behavior: single CSV split into train/dev/test
+        return create_regular_splits(raw, run_num, train_examples, processing)
+
+
+def create_multi_test_csv_splits(raw: MultiTestCSVRawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> TabularDatasetSplits:
+    """Create data splits when using multiple test CSVs."""
+    
+    # Train data is split into train/dev
+    train_dev_splits = create_regular_splits(
+        raw,  # The train part of the raw dataset
+        run_num, 
+        train_examples, 
+        processing
+    )
+
+    all_splits = {
+        DataSplit.TRAIN: train_dev_splits.train,
+        DataSplit.DEV: train_dev_splits.dev,
+    }
+
+    # The first test dataset becomes the main 'test' split
+    if raw.test_datasets:
+        first_test_raw = raw.test_datasets[0]
+        all_splits[DataSplit.TEST] = TabularDatasetSplit(
+            x=first_test_raw['x'],
+            y=first_test_raw['y'],
+            processing=processing
+        )
+        
+        # Additional test sets are named test2, test3, etc.
+        for i, test_raw in enumerate(raw.test_datasets[1:], start=2):
+            split_name = f"test{i}"
+            all_splits[DataSplit(split_name)] = TabularDatasetSplit(
+                x=test_raw['x'],
+                y=test_raw['y'],
+                processing=processing
+            )
+
+    return TabularDatasetSplits(all_splits)
+
+
+def create_regular_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> TabularDatasetSplits:
+    """Create train/dev/test splits from a single RawDataset."""
+    n = len(raw.x)
+    n_train_dev = get_train_dev_size(n, train_examples)
+    splits = get_fixed_split(n, n_train_dev, run_num)
+    
+    split_array = _create_split_array(n, splits)
+    
+    return TabularDatasetSplits({
+        DataSplit(s): TabularDatasetSplit(
+            x=raw.x[split_array == s],
+            y=raw.y[split_array == s],
+            processing=processing
+        )
+        for s in [DataSplit.TRAIN, DataSplit.DEV, DataSplit.TEST]
+        if np.any(split_array == s)
+    })
 
 
 def create_two_csv_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> List[DataSplit]:
@@ -202,102 +237,6 @@ def _uses_dev(processing: PreprocessingMethod) -> bool:
                    }
     return process2dev[processing]
 
-def create_multi_test_csv_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> List[DataSplit]:
-    """Create splits for multi-test CSV mode: train CSV -> train/dev splits, multiple test CSVs -> test1, test2, ... splits"""
-    
-    train_n = len(raw.y)  # Size of train CSV data  
-    num_test_datasets = len(raw.test_datasets)
-    test_sizes = [len(test_data['y']) for test_data in raw.test_datasets]
-    total_test_n = sum(test_sizes)
-    total_n = train_n + total_test_n
-    
-    if train_n < MIN_TOTAL_EXAMPLES:
-        raise ValueError(f"Training dataset {raw.sid} has too few examples: {train_n}")
-    
-    is_pretrain = bool(train_examples < 0)
-    use_dev = _uses_dev(processing)
-    
-    # Create indices for train data (0 to train_n-1)
-    train_indices = list(range(train_n))
-    
-    if not is_pretrain:
-        # Apply train_examples limit if specified
-        train_indices, exclude = _get_exclude_two_csv(raw=raw, indices=train_indices, run_num=run_num, train_examples=train_examples)
-    
-    # Split train data into train/dev
-    train_final, dev = _get_train_dev(raw=raw, indices=train_indices, use_dev=use_dev, run_num=run_num, is_pretrain=is_pretrain)
-    
-    # Combine all datasets: train data first, then all test data
-    combined_x_list = [raw.x]
-    combined_y_list = [raw.y]
-    
-    for test_data in raw.test_datasets:
-        combined_x_list.append(test_data['x'])
-        combined_y_list.append(test_data['y'])
-    
-    combined_x = pd.concat(combined_x_list, ignore_index=True)
-    combined_y = pd.concat(combined_y_list, ignore_index=True)
-    
-    # Create test indices for each test dataset - they start right after train data
-    test_splits = {}
-    current_idx = train_n  # Test data starts after ALL train data
-    for i, test_size in enumerate(test_sizes):
-        test_split_name = DataSplit.get_test_split_name(i)
-        test_indices = list(range(current_idx, current_idx + test_size))
-        test_splits[test_split_name] = test_indices
-        current_idx += test_size
-    
-    # Determine which indices to keep: selected train/dev indices + ALL test indices
-    valid_indices = set()
-    if train_final:
-        valid_indices.update(train_final)
-    if dev:
-        valid_indices.update(dev)
-    
-    # Add all test indices (we want to keep all test data)
-    for test_indices in test_splits.values():
-        valid_indices.update(test_indices)
-    
-    # Sort for consistent ordering
-    valid_indices = sorted(list(valid_indices))
-    
-    # Filter the combined data to only include valid indices
-    filtered_x = combined_x.iloc[valid_indices].reset_index(drop=True)
-    filtered_y = combined_y.iloc[valid_indices].reset_index(drop=True)
-    
-    # Create index mapping: old_index -> new_index
-    old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(valid_indices)}
-    
-    # Remap split indices to new indices
-    remapped_splits = {}
-    if train_final:
-        remapped_splits[DataSplit.TRAIN] = [old_to_new[i] for i in train_final]
-    if dev:
-        remapped_splits[DataSplit.DEV] = [old_to_new[i] for i in dev]
-    
-    for split_name, indices in test_splits.items():
-        remapped_splits[split_name] = [old_to_new[i] for i in indices]
-    
-    # Update the raw dataset with filtered data
-    raw.x = filtered_x
-    raw.y = filtered_y
-    
-    # Create split array for the filtered data
-    split_array = _create_split_array_multi_csv(len(valid_indices), remapped_splits)
-    
-    test_summary = ', '.join([f"{name}={len(indices)}" for name, indices in test_splits.items()])
-    verbose_print(f"Created multi-test CSV splits for {raw.sid}: train_data={train_n}, test_datasets=({test_summary}), {train_examples=}: {Counter(split_array)}")
-    return split_array
-
-
-def _create_split_array_multi_csv(total_n: int, splits: Dict[str, List[int]]) -> List[str]:
-    """Create split array for multi-test CSV mode without exclusions (data is already filtered)"""
-    idx2split = {i: split for split, indices in splits.items() for i in indices}
-    split_array = [idx2split.get(i) for i in range(total_n)]
-    # All indices should be assigned in filtered multi-test CSV mode
-    assert all(s is not None for s in split_array), "Some indices were not assigned to any split"
-    return split_array
-
 def create_inference_multi_test_csv_splits(raw: RawDataset, run_num: int, train_examples: int, processing: PreprocessingMethod) -> List[DataSplit]:
     """Create splits for inference-only mode: multiple test CSVs -> test1, test2, ... splits (no train/dev)"""
     
@@ -339,4 +278,13 @@ def create_inference_multi_test_csv_splits(raw: RawDataset, run_num: int, train_
     
     test_summary = ', '.join([f"{name}={len(indices)}" for name, indices in test_splits.items()])
     verbose_print(f"Created inference-only test splits for {raw.sid}: test_datasets=({test_summary}), total={total_n}: {Counter(split_array)}")
+    return split_array
+
+
+def _create_split_array_multi_csv(total_n: int, splits: Dict[str, List[int]]) -> List[str]:
+    """Create split array for multi-test CSV mode without exclusions (data is already filtered)"""
+    idx2split = {i: split for split, indices in splits.items() for i in indices}
+    split_array = [idx2split.get(i) for i in range(total_n)]
+    # All indices should be assigned in filtered multi-test CSV mode
+    assert all(s is not None for s in split_array), "Some indices were not assigned to any split"
     return split_array

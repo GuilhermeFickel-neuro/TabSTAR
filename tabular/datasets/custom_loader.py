@@ -88,7 +88,7 @@ class InferenceMultiTestCSVRawDataset(RawDataset):
 
 def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_column: str, 
                        description: str = "Custom CSV dataset", max_features: int = 1000,
-                       custom_test_csv_path: str = None, custom_test_csv_paths: List[str] = None) -> RawDataset:
+                       custom_test_csv_paths: List[str] = None) -> RawDataset:
     """
     Load a custom CSV dataset for TabSTAR training/finetuning.
     
@@ -98,7 +98,6 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
         target_column: Name of the target column
         description: Optional description of the dataset
         max_features: Maximum number of features to include in the dataset
-        custom_test_csv_path: Optional path to the test CSV file (for two CSV mode)
         custom_test_csv_paths: Optional list of paths to multiple test CSV files (for multi-test CSV mode)
     
     Returns:
@@ -114,11 +113,6 @@ def load_custom_dataset(dataset_id: CustomDatasetID, csv_path: str, target_colum
             if not os.path.exists(test_csv_path):
                 raise FileNotFoundError(f"Test CSV file not found: {test_csv_path}")
         return _load_multi_test_csv_dataset(dataset_id, csv_path, custom_test_csv_paths, target_column, description, max_features)
-    elif custom_test_csv_path is not None:
-        # Two CSV mode (original)
-        if not os.path.exists(custom_test_csv_path):
-            raise FileNotFoundError(f"Test CSV file not found: {custom_test_csv_path}")
-        return _load_two_csv_dataset(dataset_id, csv_path, custom_test_csv_path, target_column, description, max_features)
     else:
         # Single CSV mode (original)
         return _load_single_csv_dataset(dataset_id, csv_path, target_column, description, max_features)

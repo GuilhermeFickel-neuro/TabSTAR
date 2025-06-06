@@ -52,11 +52,11 @@ class TabStarTrainer(TabularModel):
     def __init__(self, run_name: str, dataset_ids: List[TabularDatasetID], device: torch.device, run_num: int = 0,
                  train_examples: int = 0, args: Optional[PretrainArgs] = None,
                  carte_lr_index: Optional[int] = None, custom_csv_path: str = None, custom_target_column: str = None,
-                 custom_max_features: int = 2500, custom_test_csv_path: str = None, custom_test_csv_paths: List[str] = None):
+                 custom_max_features: int = 2500, custom_test_csv_paths: List[str] = None):
         super().__init__(run_name=run_name, dataset_ids=dataset_ids, device=device, run_num=run_num,
                          train_examples=train_examples, args=args, carte_lr_index=carte_lr_index,
                          custom_csv_path=custom_csv_path, custom_target_column=custom_target_column,
-                         custom_max_features=custom_max_features, custom_test_csv_path=custom_test_csv_path,
+                         custom_max_features=custom_max_features,
                          custom_test_csv_paths=custom_test_csv_paths)
         cprint(f"Initialized the network {self.MODEL_NAME}")
         self.is_pretrain = isinstance(self.args, PretrainArgs)
@@ -64,7 +64,7 @@ class TabStarTrainer(TabularModel):
         self.optimizer: Optional[Optimizer] = None
         self.scheduler: Optional[LRScheduler] = None
         self.scaler = GradScaler()
-        self.max_epochs = MAX_EPOCHS
+        self.max_epochs = self.args.pretrain_epochs if self.is_pretrain else self.args.downstream_patience
         self.data_loaders: Dict[DataSplit, List[DataLoader]] = {}
         fix_seed()
 
