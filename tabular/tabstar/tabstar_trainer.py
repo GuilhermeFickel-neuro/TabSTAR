@@ -64,7 +64,7 @@ class TabStarTrainer(TabularModel):
         self.optimizer: Optional[Optimizer] = None
         self.scheduler: Optional[LRScheduler] = None
         self.scaler = GradScaler()
-        self.max_epochs = self.args.pretrain_epochs if self.is_pretrain else self.args.downstream_patience
+        self.max_epochs = self.args.pretrain_epochs if self.is_pretrain else self.args.patience
         self.data_loaders: Dict[DataSplit, List[DataLoader]] = {}
         fix_seed()
 
