@@ -51,9 +51,17 @@ class TabularModel:
     def initialize_data_dirs(self) -> List[str]:
         data_dirs = []
         for d in self.dataset_ids:
+            # Determine number_verbalization correctly for both pretrain and finetune
+            if isinstance(self.args, PretrainArgs):
+                number_verbalization = self.args.numbers_verbalization
+            elif isinstance(self.args, FinetuneArgs):
+                number_verbalization = self.args.pretrain_args.numbers_verbalization
+            else:
+                number_verbalization = None
+                
             data = get_data_dir(dataset=d, processing=self.PROCESSING, run_num=self.run_num,
                                 train_examples=self.train_examples, device=self.device,
-                                number_verbalization=self.args.numbers_verbalization if isinstance(self.args, PretrainArgs) else None,
+                                number_verbalization=number_verbalization,
                                 custom_csv_path=self.custom_csv_path,
                                 custom_target_column=self.custom_target_column,
                                 custom_max_features=self.custom_max_features,
